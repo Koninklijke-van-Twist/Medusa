@@ -31,6 +31,7 @@ require __DIR__ . "/odata.php";
 require __DIR__ . "/auth.php";
 require __DIR__ . "/lib_times.php";
 require __DIR__ . "/logincheck.php";
+require_once __DIR__ . "/loadingscreen.php";
 
 $day = 3600 * 24;
 $selfPath = basename((string) ($_SERVER['PHP_SELF'] ?? 'goedkeuren.php'));
@@ -824,6 +825,13 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 </head>
 
 <body>
+    <?= render_loading_screen([
+        'id' => 'page-loading-screen',
+        'title' => 'Gegevens verversen...',
+        'subtitle' => 'Even geduld aub',
+        'visible' => false,
+    ]) ?>
+
     <div class="wrap">
         <?= injectTimerHtml([
             'statusUrl' => 'odata.php?action=cache_status',
@@ -1096,6 +1104,9 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         {
             if (!filterForm || filterSubmitting) return;
             filterSubmitting = true;
+            if (window.showLoadingScreen) {
+                window.showLoadingScreen('page-loading-screen');
+            }
             filterForm.submit();
         }
 
