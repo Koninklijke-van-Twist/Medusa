@@ -504,6 +504,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             right: 16px;
             width: 300px;
             z-index: 1000;
+            overflow-x: hidden;
         }
 
         .sidebar-card {
@@ -513,6 +514,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             padding: 14px;
             max-height: calc(100vh - 32px);
             overflow-y: auto;
+            overflow-x: hidden;
             box-shadow: 0 8px 30px rgba(15, 23, 42, 0.14);
         }
 
@@ -539,10 +541,25 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             padding: 10px 12px;
             cursor: pointer;
             font-family: inherit;
+            transform-origin: right center;
+            transition: transform 0.35s ease, opacity 0.35s ease, max-height 0.35s ease, margin 0.35s ease, padding 0.35s ease, border-width 0.35s ease;
+            max-height: 140px;
+            overflow: hidden;
         }
 
         .sidebar-link:hover {
             background: #fffbeb;
+        }
+
+        .sidebar-link.sidebar-link-removing {
+            opacity: 0;
+            transform: translateX(42px) scale(0.96);
+            max-height: 0;
+            margin: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            border-width: 0;
+            pointer-events: none;
         }
 
         .sidebar-link-week {
@@ -810,6 +827,27 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
         .scroll-target-highlight {
             box-shadow: 0 0 0 3px #f59e0b inset;
+        }
+
+        .vakantie-row.vakantie-row-pulse {
+            animation: vakantie-row-pulse 0.85s ease;
+        }
+
+        @keyframes vakantie-row-pulse {
+            0% {
+                box-shadow: inset 0 0 0 0 rgba(34, 197, 94, 0.00);
+                background-color: #dcfce7;
+            }
+
+            35% {
+                box-shadow: inset 0 0 0 999px rgba(134, 239, 172, 0.55);
+                background-color: #bbf7d0;
+            }
+
+            100% {
+                box-shadow: inset 0 0 0 0 rgba(34, 197, 94, 0.00);
+                background-color: #dcfce7;
+            }
         }
 
         @media (max-width: 1450px) {
@@ -1080,12 +1118,13 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             </div>
 
             <?php if (!empty($actionItems)): ?>
-                <aside class="sidebar">
+                <aside class="sidebar" id="approval-sidebar">
                     <div class="sidebar-card">
                         <h2 class="sidebar-title">Nog te behandelen</h2>
-                        <div class="sidebar-list">
+                        <div class="sidebar-list" id="approval-sidebar-list">
                             <?php foreach ($actionItems as $item): ?>
                                 <button type="button" class="sidebar-link"
+                                    data-row-id="<?= htmlspecialchars($item['rowId']) ?>"
                                     onclick="scrollToActionRow('<?= htmlspecialchars($item['rowId']) ?>', <?= $item['detailId'] !== null ? '\'' . htmlspecialchars($item['detailId']) . '\'' : 'null' ?>)">
                                     <span class="sidebar-link-week"><?= htmlspecialchars($item['weekLabel']) ?></span>
                                     <span class="sidebar-link-name"><?= htmlspecialchars($item['resourceName']) ?></span>
@@ -1104,6 +1143,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         const filterApprover = document.getElementById('approverUserId');
         const filterFromDate = document.getElementById('fromDate');
         const filterToDate = document.getElementById('toDate');
+        const approvalSidebar = document.getElementById('approval-sidebar');
+        const approvalSidebarList = document.getElementById('approval-sidebar-list');
         let filterSubmitting = false;
         let loadingScreenTimer = null;
 
@@ -1165,6 +1206,26 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             }, 1800);
         }
 
+        function removeSidebarItemForRow (rowId)
+        {
+            if (!approvalSidebarList) return;
+
+            const selector = '[data-row-id="' + CSS.escape(rowId) + '"]';
+            const sidebarItem = approvalSidebarList.querySelector(selector);
+            if (!sidebarItem) return;
+
+            sidebarItem.classList.add('sidebar-link-removing');
+            window.setTimeout(() =>
+            {
+                sidebarItem.remove();
+
+                if (approvalSidebarList.children.length === 0 && approvalSidebar)
+                {
+                    approvalSidebar.remove();
+                }
+            }, 360);
+        }
+
         // ── Vakantie markeren ───────────────────────────────────────────────────
         function markVakantie (btn)
         {
@@ -1206,7 +1267,14 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                             row.appendChild(document.createElement('td')); // lege indicator
                             row.appendChild(nameTd);
                             row.appendChild(labelTd);
+                            row.classList.add('vakantie-row-pulse');
+                            window.setTimeout(() =>
+                            {
+                                row.classList.remove('vakantie-row-pulse');
+                            }, 900);
                         }
+
+                        removeSidebarItemForRow(rowId);
                     } else
                     {
                         alert('Er is een fout opgetreden: ' + (data.error || 'onbekend'));
