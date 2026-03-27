@@ -69,12 +69,16 @@ if (trim((string) ($_GET['action'] ?? '')) === 'markeer_vakantie') {
 // DATUMBEREIK
 // =========================================================
 $today = date('Y-m-d');
-$defaultFrom = date('Y-m-d', strtotime('-1 month'));
+$startOfYear = date('Y-01-01');
+$threeMonthsAgo = date('Y-m-d', strtotime('-3 months'));
+$defaultFrom = max($startOfYear, $threeMonthsAgo);
 $recentActivityFrom = $defaultFrom;
 
 $from = trim((string) ($_GET['from'] ?? ''));
 $to = trim((string) ($_GET['to'] ?? ''));
-if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) {
+$hasValidFrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) === 1;
+$autoFromMode = !$hasValidFrom;
+if (!$hasValidFrom) {
     $from = $defaultFrom;
 }
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
@@ -248,6 +252,7 @@ if ($resourcesForApprover) {
     }
 
     $recentResourceNos = [];
+    $recentLines = [];
     if ($recentTsNos) {
         $recentLines = gk_odata_fetch_by_or_filter(
             $base,
@@ -278,6 +283,61 @@ if ($resourcesForApprover) {
         $resourcesForApprover = array_intersect_key($resourcesForApprover, $recentResourceNos);
     } else {
         $resourcesForApprover = [];
+    }
+
+    if ($autoFromMode && $resourcesForApprover) {
+        $weekStartsWithData = [];
+
+        foreach ($recentLines as $line) {
+            $lineTsNo = trim((string) ($line['Time_Sheet_No'] ?? ''));
+            if ($lineTsNo === '' || !isset($recentTsByNo[$lineTsNo])) {
+                continue;
+            }
+
+            $resourceNo = trim((string) ($line['Header_Resource_No'] ?? ''));
+            if ($resourceNo === '' || !isset($resourcesForApprover[$resourceNo])) {
+                continue;
+            }
+
+            $weekStartRaw = (string) ($recentTsByNo[$lineTsNo]['Starting_Date'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $weekStartRaw)) {
+                continue;
+            }
+
+            try {
+                $weekStart = (new DateTimeImmutable($weekStartRaw))->modify('monday this week')->format('Y-m-d');
+            } catch (Exception $e) {
+                continue;
+            }
+
+            $weekStartsWithData[$weekStart] = true;
+        }
+
+        foreach ($recentTsByNo as $row) {
+            $resourceNo = trim((string) ($row['Resource_No'] ?? ''));
+            if ($resourceNo === '' || !isset($resourcesForApprover[$resourceNo])) {
+                continue;
+            }
+
+            $weekStartRaw = (string) ($row['Starting_Date'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $weekStartRaw)) {
+                continue;
+            }
+
+            try {
+                $weekStart = (new DateTimeImmutable($weekStartRaw))->modify('monday this week')->format('Y-m-d');
+            } catch (Exception $e) {
+                continue;
+            }
+
+            $weekStartsWithData[$weekStart] = true;
+        }
+
+        if (!empty($weekStartsWithData)) {
+            $firstWeekStarts = array_keys($weekStartsWithData);
+            sort($firstWeekStarts);
+            $from = (string) ($firstWeekStarts[0] ?? $from);
+        }
     }
 }
 
