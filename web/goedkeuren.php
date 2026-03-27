@@ -182,6 +182,17 @@ function gk_status_class(string $status): string
     };
 }
 
+function gk_status_uitleg(string $status): ?string
+{
+    return match ($status) {
+        'Approved' => 'betekent dat jij ze goedgekeurd hebt.',
+        'Open' => 'betekent dat de urenstaten gemaakt zijn, maar nog niet naar jou verstuurd zijn.',
+        'Submitted' => 'betekent dat ze naar jou verstuurd zijn en jij ze nog moet goedkeuren.',
+        'Rejected' => 'betekent dat jij deze urenstaten afgewezen hebt.',
+        default => null,
+    };
+}
+
 function gk_is_vakantie(string $resourceNo, string $weekStart): bool
 {
     $key = hash('sha256', $resourceNo . '|' . $weekStart);
@@ -497,12 +508,19 @@ foreach ($byWeek as $weekStart => $resources) {
     }
     $weekEnd = $weekDates[6];
     $isPastWeek = ($weekEnd < $today);
+    $isCurrentWeek = ($weekStart <= $today && $weekEnd >= $today);
     $weekNo = (new DateTimeImmutable($weekStart))->format('W');
 
     foreach ($resources as $resourceNo => $resourceData) {
         $rowId = 'row-' . md5($resourceNo . $weekStart);
 
-        if (!$resourceData['isVakantie'] && !$resourceData['present'] && $isPastWeek) {
+        $shouldTreatAsMissing = !$resourceData['isVakantie']
+            && (
+                (!$resourceData['present'] && $isPastWeek)
+                || (!$isCurrentWeek && empty($resourceData['lines']))
+            );
+
+        if ($shouldTreatAsMissing) {
             $actionItems[] = [
                 'rowId' => $rowId,
                 'detailId' => null,
@@ -841,6 +859,24 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             font-size: 11px;
         }
 
+        .status-uitleg {
+            margin: 0 0 10px;
+            font-size: 12px;
+            color: #334155;
+            display: grid;
+            gap: 3px;
+        }
+
+        .status-uitleg-regel {
+            padding: 4px 8px;
+            border-radius: 6px;
+            width: fit-content;
+        }
+
+        .status-uitleg-regel strong {
+            color: #0f172a;
+        }
+
         .detail-table th {
             background: #e4ecf8;
             font-size: 10px;
@@ -1003,7 +1039,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                         ?>
                         <div class="week-card">
                             <div class="week-title">Week <?= htmlspecialchars($weekNo) ?> &ndash;
-                                <?= htmlspecialchars($weekYr) ?></div>
+                                <?= htmlspecialchars($weekYr) ?>
+                            </div>
                             <div class="week-dates">
                                 <?= gk_formatDate($weekStart) ?> t/m <?= gk_formatDate($weekEnd) ?>
                             </div>
@@ -1013,6 +1050,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                     <tr>
                                         <th></th><!-- indicator kolom -->
                                         <th style="text-align:left">Resource</th>
+                                        <th>Week totaal</th>
                                         <?php for ($d = 0; $d < 7; $d++): ?>
                                             <th>
                                                 <?= $DAY_NAMES[$d] ?><br>
@@ -1035,18 +1073,18 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                             <tr class="resource-row vakantie-row">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                                <td colspan="8" style="text-align:center; color:#15803d; font-weight:600;">
+                                                <td colspan="9" style="text-align:center; color:#15803d; font-weight:600;">
                                                     🌴 Vakantie
                                                 </td>
                                             </tr>
 
-                                        <?php elseif (!$rdata['present'] && $isPastWeek): ?>
+                                        <?php elseif ((!$rdata['present'] && $isPastWeek) || (!$isCurrentWeek && empty($rdata['lines']))): ?>
                                             <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
                                             <tr class="resource-row missing-past" id="<?= $rowId ?>">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                                <td colspan="7" class="missing-label" style="color:#dc2626;">
-                                                    Ontbreekt urenstaat
+                                                <td colspan="8" class="missing-label" style="color:#dc2626;">
+                                                    Urenstaat ontbreekt
                                                 </td>
                                                 <td>
                                                     <button class="vakantie-btn" title="Markeren als vakantie"
@@ -1064,7 +1102,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                             <tr class="resource-row missing-future">
                                                 <td><span class="pending-badge" title="Nog niet ontvangen">⏳</span></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                                <td colspan="8" class="missing-label">
+                                                <td colspan="9" class="missing-label">
                                                     Nog geen urenstaten ontvangen
                                                 </td>
                                             </tr>
@@ -1074,7 +1112,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                             <tr class="resource-row missing-future">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                                <td colspan="8" class="missing-label">Nog geen urenstaat</td>
+                                                <td colspan="9" class="missing-label">Nog geen urenstaat</td>
                                             </tr>
 
                                         <?php else: ?>
@@ -1094,6 +1132,9 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                     <?php endif; ?>
                                                 </td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td>
+                                                    <?= htmlspecialchars(gk_hhmm(array_sum($rdata['dayTotals']))) ?>
+                                                </td>
                                                 <?php for ($d = 0; $d < 7; $d++): ?>
                                                     <td class="<?= $rdata['dayTotals'][$d] <= 0 ? 'zeroHours' : '' ?>">
                                                         <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
@@ -1104,11 +1145,55 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                             <!-- ======= DETAILRIJ (accordion, standaard verborgen) ======= -->
                                             <tr class="detail-row" id="<?= $detailId ?>" style="display:none;">
-                                                <td colspan="10">
+                                                <td colspan="11">
                                                     <div class="detail-inner">
                                                         <?php if (empty($rdata['lines'])): ?>
                                                             <span class="muted">Geen regels gevonden in deze urenstaat.</span>
                                                         <?php else: ?>
+                                                            <?php
+                                                            $statusPresent = [];
+                                                            foreach ($rdata['lines'] as $line) {
+                                                                $lineStatus = trim((string) ($line['Status'] ?? ''));
+                                                                if ($lineStatus !== '') {
+                                                                    $statusPresent[$lineStatus] = true;
+                                                                }
+                                                            }
+
+                                                            $statusVolgorde = ['Approved', 'Open', 'Submitted', 'Rejected'];
+                                                            $zichtbareStatussen = [];
+                                                            foreach ($statusVolgorde as $s) {
+                                                                if (isset($statusPresent[$s])) {
+                                                                    $zichtbareStatussen[] = $s;
+                                                                    unset($statusPresent[$s]);
+                                                                }
+                                                            }
+
+                                                            if (!empty($statusPresent)) {
+                                                                $overige = array_keys($statusPresent);
+                                                                sort($overige, SORT_NATURAL | SORT_FLAG_CASE);
+                                                                foreach ($overige as $s) {
+                                                                    $zichtbareStatussen[] = $s;
+                                                                }
+                                                            }
+
+                                                            $statusMetUitleg = [];
+                                                            foreach ($zichtbareStatussen as $s) {
+                                                                $uitleg = gk_status_uitleg($s);
+                                                                if ($uitleg !== null) {
+                                                                    $statusMetUitleg[] = ['status' => $s, 'uitleg' => $uitleg];
+                                                                }
+                                                            }
+                                                            ?>
+                                                            <?php if (!empty($statusMetUitleg)): ?>
+                                                                <div class="status-uitleg">
+                                                                    <?php foreach ($statusMetUitleg as $statusInfo): ?>
+                                                                        <div class="status-uitleg-regel <?= gk_status_class((string) $statusInfo['status']) ?>">
+                                                                            <strong><?= htmlspecialchars((string) $statusInfo['status']) ?></strong>
+                                                                            <?= htmlspecialchars((string) $statusInfo['uitleg']) ?>
+                                                                        </div>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                            <?php endif; ?>
                                                             <table class="detail-table">
                                                                 <thead>
                                                                     <tr>
@@ -1206,8 +1291,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                         <h2 class="sidebar-title">Nog te behandelen</h2>
                         <div class="sidebar-list" id="approval-sidebar-list">
                             <?php foreach ($actionItems as $item): ?>
-                                <button type="button" class="sidebar-link"
-                                    data-row-id="<?= htmlspecialchars($item['rowId']) ?>"
+                                <button type="button" class="sidebar-link" data-row-id="<?= htmlspecialchars($item['rowId']) ?>"
                                     onclick="scrollToActionRow('<?= htmlspecialchars($item['rowId']) ?>', <?= $item['detailId'] !== null ? '\'' . htmlspecialchars($item['detailId']) . '\'' : 'null' ?>)">
                                     <span class="sidebar-link-week"><?= htmlspecialchars($item['weekLabel']) ?></span>
                                     <span class="sidebar-link-name"><?= htmlspecialchars($item['resourceName']) ?></span>
@@ -1236,7 +1320,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             if (!filterForm || filterSubmitting) return;
             filterSubmitting = true;
 
-            loadingScreenTimer = window.setTimeout(() => {
+            loadingScreenTimer = window.setTimeout(() =>
+            {
                 if (window.showLoadingScreen)
                 {
                     window.showLoadingScreen('page-loading-screen');
