@@ -179,30 +179,20 @@ if (!function_exists('render_loading_screen')) {
 
                     do
                     {
-                        // Geef een bias naar het midden: vaker dichtbij centrum, soms alsnog verder weg.
-                        if (Math.random() < 0.8)
-                        {
-                            const centerX = (cols - 1) / 2;
-                            const centerY = (rows - 1) / 2;
-                            const angle = Math.random() * Math.PI * 2;
-                            const radiusFactor = Math.pow(Math.random(), 2.2); // sterkere centrum-bias
-                            const maxRadiusX = Math.max(1, centerX);
-                            const maxRadiusY = Math.max(1, centerY);
+                        const centerX = (cols - 1) / 2;
+                        const centerY = (rows - 1) / 2;
+                        const angle = Math.random() * Math.PI * 2;
+                        const radiusFactor = Math.pow(Math.random(), 50); // sterkere centrum-bias
+                        const maxRadiusX = Math.max(1, centerX);
+                        const maxRadiusY = Math.max(1, centerY);
 
-                            const x = centerX + Math.cos(angle) * maxRadiusX * radiusFactor;
-                            const y = centerY + Math.sin(angle) * maxRadiusY * radiusFactor;
+                        const x = centerX + Math.cos(angle) * maxRadiusX * radiusFactor;
+                        const y = centerY + Math.sin(angle) * maxRadiusY * radiusFactor;
 
-                            candidate = {
-                                x: Math.max(0, Math.min(cols - 1, Math.round(x))),
-                                y: Math.max(0, Math.min(rows - 1, Math.round(y)))
-                            };
-                        } else
-                        {
-                            candidate = {
-                                x: Math.floor(Math.random() * cols),
-                                y: Math.floor(Math.random() * rows)
-                            };
-                        }
+                        candidate = {
+                            x: Math.max(0, Math.min(cols - 1, Math.round(x))),
+                            y: Math.max(0, Math.min(rows - 1, Math.round(y)))
+                        };
 
                         attempts++;
                         if (attempts > 5000)
