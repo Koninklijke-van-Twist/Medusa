@@ -865,7 +865,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                 <?php if ($selectedApproverUserId === ''): ?>
                     <div class="no-data">Selecteer een goedkeurder om urenstaten te bekijken.</div>
                 <?php elseif (empty($resourcesForApprover)): ?>
-                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand gevonden.</div>
+                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand
+                        gevonden.</div>
                 <?php elseif (empty($byWeek)): ?>
                     <div class="no-data">Geen weken gevonden in de geselecteerde periode.</div>
                 <?php else: ?>
@@ -886,7 +887,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                         $isCurrentWeek = ($weekStart <= $today && $weekEnd >= $today);
                         ?>
                         <div class="week-card">
-                            <div class="week-title">Week <?= htmlspecialchars($weekNo) ?> &ndash; <?= htmlspecialchars($weekYr) ?></div>
+                            <div class="week-title">Week <?= htmlspecialchars($weekNo) ?> &ndash;
+                                <?= htmlspecialchars($weekYr) ?></div>
                             <div class="week-dates">
                                 <?= gk_formatDate($weekStart) ?> t/m <?= gk_formatDate($weekEnd) ?>
                             </div>
@@ -899,7 +901,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                         <?php for ($d = 0; $d < 7; $d++): ?>
                                             <th>
                                                 <?= $DAY_NAMES[$d] ?><br>
-                                                <span class="muted"><?= (new DateTimeImmutable($weekDates[$d]))->format('j/n') ?></span>
+                                                <span
+                                                    class="muted"><?= (new DateTimeImmutable($weekDates[$d]))->format('j/n') ?></span>
                                             </th>
                                         <?php endfor; ?>
                                         <th></th><!-- vakantieknop kolom -->
@@ -913,153 +916,156 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                         ?>
 
                                         <?php if ($rdata['isVakantie']): ?>
-                                    <!-- ======= VAKANTIERIJ ======= -->
-                                    <tr class="resource-row vakantie-row">
-                                        <td></td>
-                                        <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                        <td colspan="8" style="text-align:center; color:#15803d; font-weight:600;">
-                                            🌴 Vakantie
-                                        </td>
-                                    </tr>
+                                            <!-- ======= VAKANTIERIJ ======= -->
+                                            <tr class="resource-row vakantie-row">
+                                                <td></td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td colspan="8" style="text-align:center; color:#15803d; font-weight:600;">
+                                                    🌴 Vakantie
+                                                </td>
+                                            </tr>
 
-                                <?php elseif (!$rdata['present'] && $isPastWeek): ?>
-                                    <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
-                                    <tr class="resource-row missing-past" id="<?= $rowId ?>">
-                                        <td></td>
-                                        <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                        <td colspan="7" class="missing-label" style="color:#dc2626;">
-                                            Ontbreekt urenstaat
-                                        </td>
-                                        <td>
-                                            <button class="vakantie-btn" title="Markeren als vakantie"
-                                                data-resource-no="<?= htmlspecialchars($rno) ?>"
-                                                data-week-start="<?= htmlspecialchars($weekStart) ?>" data-row-id="<?= $rowId ?>"
-                                                onclick="markVakantie(this); event.stopPropagation();">
-                                                🌴
-                                            </button>
-                                        </td>
-                                    </tr>
+                                        <?php elseif (!$rdata['present'] && $isPastWeek): ?>
+                                            <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
+                                            <tr class="resource-row missing-past" id="<?= $rowId ?>">
+                                                <td></td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td colspan="7" class="missing-label" style="color:#dc2626;">
+                                                    Ontbreekt urenstaat
+                                                </td>
+                                                <td>
+                                                    <button class="vakantie-btn" title="Markeren als vakantie"
+                                                        data-resource-no="<?= htmlspecialchars($rno) ?>"
+                                                        data-week-start="<?= htmlspecialchars($weekStart) ?>"
+                                                        data-row-id="<?= $rowId ?>"
+                                                        onclick="markVakantie(this); event.stopPropagation();">
+                                                        🌴
+                                                    </button>
+                                                </td>
+                                            </tr>
 
-                                <?php elseif (!$rdata['present']): ?>
-                                    <!-- ======= ONTBREKENDE RIJ – TOEKOMST / HUIDIGE WEEK (grijs) ======= -->
-                                    <tr class="resource-row missing-future">
-                                        <td></td>
-                                        <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                        <td colspan="8" class="missing-label">
-                                            <?= $isCurrentWeek ? 'Urenstaat nog niet ontvangen' : 'Nog geen urenstaat' ?>
-                                        </td>
-                                    </tr>
+                                        <?php elseif (!$rdata['present']): ?>
+                                            <!-- ======= ONTBREKENDE RIJ – TOEKOMST / HUIDIGE WEEK (grijs) ======= -->
+                                            <tr class="resource-row missing-future">
+                                                <td></td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td colspan="8" class="missing-label">
+                                                    <?= $isCurrentWeek ? 'Urenstaat nog niet ontvangen' : 'Nog geen urenstaat' ?>
+                                                </td>
+                                            </tr>
 
-                                <?php else: ?>
-                                    <!-- ======= NORMALE RIJ MET URENSTAAT ======= -->
-                                    <tr class="resource-row" id="<?= $rowId ?>" onclick="toggleDetail('<?= $detailId ?>')">
-                                        <td>
-                                            <?php if ($rdata['unapprovedCount'] > 0): ?>
-                                                <?php $onlyZeroHourUnapproved = (int) ($rdata['unapprovedActionableCount'] ?? 0) === 0; ?>
-                                                <span
-                                                    class="unapproved-badge <?= $onlyZeroHourUnapproved ? 'unapproved-badge-zero' : '' ?>"
-                                                    title="<?= (int) $rdata['unapprovedCount'] ?> regel(s) nog niet goedgekeurd">
-                                                    <?= $onlyZeroHourUnapproved ? '✓' : '▶' ?> <?= (int) $rdata['unapprovedCount'] ?>
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="approved-badge" title="Alle regels goedgekeurd">✓</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                        <?php for ($d = 0; $d < 7; $d++): ?>
-                                            <td class="<?= $rdata['dayTotals'][$d] <= 0 ? 'zeroHours' : '' ?>">
-                                                <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
-                                            </td>
-                                        <?php endfor; ?>
-                                        <td></td>
-                                    </tr>
+                                        <?php else: ?>
+                                            <!-- ======= NORMALE RIJ MET URENSTAAT ======= -->
+                                            <tr class="resource-row" id="<?= $rowId ?>" onclick="toggleDetail('<?= $detailId ?>')">
+                                                <td>
+                                                    <?php if ($rdata['unapprovedCount'] > 0): ?>
+                                                        <?php $onlyZeroHourUnapproved = (int) ($rdata['unapprovedActionableCount'] ?? 0) === 0; ?>
+                                                        <span
+                                                            class="unapproved-badge <?= $onlyZeroHourUnapproved ? 'unapproved-badge-zero' : '' ?>"
+                                                            title="<?= (int) $rdata['unapprovedCount'] ?> regel(s) nog niet goedgekeurd">
+                                                            <?= $onlyZeroHourUnapproved ? '✓' : '▶' ?>
+                                                            <?= (int) $rdata['unapprovedCount'] ?>
+                                                        </span>
+                                                    <?php else: ?>
+                                                        <span class="approved-badge" title="Alle regels goedgekeurd">✓</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <?php for ($d = 0; $d < 7; $d++): ?>
+                                                    <td class="<?= $rdata['dayTotals'][$d] <= 0 ? 'zeroHours' : '' ?>">
+                                                        <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
+                                                    </td>
+                                                <?php endfor; ?>
+                                                <td></td>
+                                            </tr>
 
-                                    <!-- ======= DETAILRIJ (accordion, standaard verborgen) ======= -->
-                                    <tr class="detail-row" id="<?= $detailId ?>" style="display:none;">
-                                        <td colspan="10">
-                                            <div class="detail-inner">
-                                                <?php if (empty($rdata['lines'])): ?>
-                                                    <span class="muted">Geen regels gevonden in deze urenstaat.</span>
-                                                <?php else: ?>
-                                                    <table class="detail-table">
-                                                        <thead>
-                                                            <tr>
-                                                                <th style="text-align:left">Regel</th>
-                                                                <th style="text-align:left">Type</th>
-                                                                <th style="text-align:left">Omschrijving</th>
-                                                                <th>Project</th>
-                                                                <th>Status</th>
-                                                                <?php foreach ($DAY_NAMES as $dn): ?>
-                                                                    <th><?= $dn ?></th>
-                                                                <?php endforeach; ?>
-                                                                <th>Totaal</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            <?php foreach ($rdata['lines'] as $l): ?>
-                                                                <?php
-                                                                $wt = (string) ($l['Work_Type_Code'] ?? '');
-                                                                $status = (string) ($l['Status'] ?? '');
-                                                                ?>
-                                                                <tr>
-                                                                    <td style="text-align:left; white-space:nowrap">
-                                                                        <?= htmlspecialchars(
-                                                                            (string) ($l['Time_Sheet_No'] ?? '') . '-' .
-                                                                            (int) ($l['Line_No'] ?? 0)
-                                                                        ) ?>
-                                                                    </td>
-                                                                    <td style="text-align:left">
-                                                                        <?= htmlspecialchars($wt) ?>
-                                                                    </td>
-                                                                    <td style="text-align:left">
-                                                                        <?= htmlspecialchars((string) ($l['Description'] ?? '')) ?>
-                                                                    </td>
-                                                                    <td>
-                                                                        <?= htmlspecialchars((string) ($l['Job_Task_No'] ?? '')) ?>
-                                                                    </td>
-                                                                    <td class="<?= gk_status_class($status) ?>">
-                                                                        <?= htmlspecialchars($status) ?>
-                                                                    </td>
-                                                                    <?php for ($i = 1; $i <= 7; $i++):
-                                                                        $h = (float) ($l["Field{$i}"] ?? 0);
+                                            <!-- ======= DETAILRIJ (accordion, standaard verborgen) ======= -->
+                                            <tr class="detail-row" id="<?= $detailId ?>" style="display:none;">
+                                                <td colspan="10">
+                                                    <div class="detail-inner">
+                                                        <?php if (empty($rdata['lines'])): ?>
+                                                            <span class="muted">Geen regels gevonden in deze urenstaat.</span>
+                                                        <?php else: ?>
+                                                            <table class="detail-table">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th style="text-align:left">Regel</th>
+                                                                        <th style="text-align:left">Type</th>
+                                                                        <th style="text-align:left">Omschrijving</th>
+                                                                        <th>Project</th>
+                                                                        <th>Status</th>
+                                                                        <?php foreach ($DAY_NAMES as $dn): ?>
+                                                                            <th><?= $dn ?></th>
+                                                                        <?php endforeach; ?>
+                                                                        <th>Totaal</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($rdata['lines'] as $l): ?>
+                                                                        <?php
+                                                                        $wt = (string) ($l['Work_Type_Code'] ?? '');
+                                                                        $status = (string) ($l['Status'] ?? '');
                                                                         ?>
-                                                                        <td class="<?= $h <= 0 ? 'zeroHours' : '' ?>">
-                                                                            <?= $wt === 'KM'
-                                                                                ? htmlspecialchars((string) $h) . '&nbsp;km'
-                                                                                : htmlspecialchars(gk_hhmm($h)) ?>
+                                                                        <tr>
+                                                                            <td style="text-align:left; white-space:nowrap">
+                                                                                <?= htmlspecialchars(
+                                                                                    (string) ($l['Time_Sheet_No'] ?? '') . '-' .
+                                                                                    (int) ($l['Line_No'] ?? 0)
+                                                                                ) ?>
+                                                                            </td>
+                                                                            <td style="text-align:left">
+                                                                                <?= htmlspecialchars($wt) ?>
+                                                                            </td>
+                                                                            <td style="text-align:left">
+                                                                                <?= htmlspecialchars((string) ($l['Description'] ?? '')) ?>
+                                                                            </td>
+                                                                            <td>
+                                                                                <?= htmlspecialchars((string) ($l['Job_Task_No'] ?? '')) ?>
+                                                                            </td>
+                                                                            <td class="<?= gk_status_class($status) ?>">
+                                                                                <?= htmlspecialchars($status) ?>
+                                                                            </td>
+                                                                            <?php for ($i = 1; $i <= 7; $i++):
+                                                                                $h = (float) ($l["Field{$i}"] ?? 0);
+                                                                                ?>
+                                                                                <td class="<?= $h <= 0 ? 'zeroHours' : '' ?>">
+                                                                                    <?= $wt === 'KM'
+                                                                                        ? htmlspecialchars((string) $h) . '&nbsp;km'
+                                                                                        : htmlspecialchars(gk_hhmm($h)) ?>
+                                                                                </td>
+                                                                            <?php endfor; ?>
+                                                                            <td>
+                                                                                <strong>
+                                                                                    <?php $tot = (float) ($l['Total_Quantity'] ?? 0); ?>
+                                                                                    <?= $wt === 'KM'
+                                                                                        ? htmlspecialchars((string) $tot) . '&nbsp;km'
+                                                                                        : htmlspecialchars(gk_hhmm($tot)) ?>
+                                                                                </strong>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                                <tfoot>
+                                                                    <tr>
+                                                                        <td colspan="5" style="text-align:left; font-weight:700;">Totaal per
+                                                                            dag
                                                                         </td>
-                                                                    <?php endfor; ?>
-                                                                    <td>
-                                                                        <strong>
-                                                                            <?php $tot = (float) ($l['Total_Quantity'] ?? 0); ?>
-                                                                            <?= $wt === 'KM'
-                                                                                ? htmlspecialchars((string) $tot) . '&nbsp;km'
-                                                                                : htmlspecialchars(gk_hhmm($tot)) ?>
-                                                                        </strong>
-                                                                    </td>
-                                                                </tr>
-                                                            <?php endforeach; ?>
-                                                        </tbody>
-                                                        <tfoot>
-                                                            <tr>
-                                                                <td colspan="5" style="text-align:left; font-weight:700;">Totaal per dag
-                                                                </td>
-                                                                <?php for ($d = 0; $d < 7; $d++): ?>
-                                                                    <td class="<?= $rdata['dayTotals'][$d] <= 0 ? 'zeroHours' : '' ?>"
-                                                                        style="font-weight:700;">
-                                                                        <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
-                                                                    </td>
-                                                                <?php endfor; ?>
-                                                                <td style="font-weight:700;">
-                                                                    <?= htmlspecialchars(gk_hhmm(array_sum($rdata['dayTotals']))) ?>
-                                                                </td>
-                                                            </tr>
-                                                        </tfoot>
-                                                    </table>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
-                                    </tr>
+                                                                        <?php for ($d = 0; $d < 7; $d++): ?>
+                                                                            <td class="<?= $rdata['dayTotals'][$d] <= 0 ? 'zeroHours' : '' ?>"
+                                                                                style="font-weight:700;">
+                                                                                <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
+                                                                            </td>
+                                                                        <?php endfor; ?>
+                                                                        <td style="font-weight:700;">
+                                                                            <?= htmlspecialchars(gk_hhmm(array_sum($rdata['dayTotals']))) ?>
+                                                                        </td>
+                                                                    </tr>
+                                                                </tfoot>
+                                                            </table>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </td>
+                                            </tr>
                                         <?php endif; ?>
 
                                     <?php endforeach; ?>
@@ -1077,9 +1083,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                         <h2 class="sidebar-title">Nog te behandelen</h2>
                         <div class="sidebar-list">
                             <?php foreach ($actionItems as $item): ?>
-                                <button
-                                    type="button"
-                                    class="sidebar-link"
+                                <button type="button" class="sidebar-link"
                                     onclick="scrollToActionRow('<?= htmlspecialchars($item['rowId']) ?>')">
                                     <span class="sidebar-link-week"><?= htmlspecialchars($item['weekLabel']) ?></span>
                                     <span class="sidebar-link-name"><?= htmlspecialchars($item['resourceName']) ?></span>
@@ -1104,7 +1108,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         {
             if (!filterForm || filterSubmitting) return;
             filterSubmitting = true;
-            if (window.showLoadingScreen) {
+            if (window.showLoadingScreen)
+            {
                 window.showLoadingScreen('page-loading-screen');
             }
             filterForm.submit();
@@ -1138,7 +1143,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
             row.scrollIntoView({ behavior: 'smooth', block: 'center' });
             row.classList.add('scroll-target-highlight');
-            window.setTimeout(() => {
+            window.setTimeout(() =>
+            {
                 row.classList.remove('scroll-target-highlight');
             }, 1800);
         }

@@ -96,10 +96,12 @@ if (!function_exists('render_loading_screen')) {
         </style>
 
         <script>
-            (function () {
+            (function ()
+            {
                 const loader = document.getElementById(<?= json_encode($id) ?>);
                 const canvas = document.getElementById(<?= json_encode($canvasId) ?>);
-                if (!loader || !canvas) {
+                if (!loader || !canvas)
+                {
                     return;
                 }
 
@@ -114,15 +116,18 @@ if (!function_exists('render_loading_screen')) {
                 let tickTimer = null;
                 let pathPlannedForFood = false;
 
-                function isFoodBlockedByCard(x, y) {
+                function isFoodBlockedByCard (x, y)
+                {
                     const card = loader.querySelector('.snake-loader-card');
-                    if (!card) {
+                    if (!card)
+                    {
                         return false;
                     }
 
                     const cardRect = card.getBoundingClientRect();
                     const canvasRect = canvas.getBoundingClientRect();
-                    if (canvasRect.width <= 0 || canvasRect.height <= 0) {
+                    if (canvasRect.width <= 0 || canvasRect.height <= 0)
+                    {
                         return false;
                     }
 
@@ -135,19 +140,23 @@ if (!function_exists('render_loading_screen')) {
                     return x >= leftCell && x <= rightCell && y >= topCell && y <= bottomCell;
                 }
 
-                function keyForPoint(point) {
+                function keyForPoint (point)
+                {
                     return point.x + ',' + point.y;
                 }
 
-                function bodyKey(body) {
+                function bodyKey (body)
+                {
                     return body.map(keyForPoint).join('|');
                 }
 
-                function inBounds(x, y) {
+                function inBounds (x, y)
+                {
                     return x >= 0 && y >= 0 && x < cols && y < rows;
                 }
 
-                function resizeCanvas() {
+                function resizeCanvas ()
+                {
                     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
                     const width = Math.max(window.innerWidth, 320);
                     const height = Math.max(window.innerHeight, 220);
@@ -162,18 +171,21 @@ if (!function_exists('render_loading_screen')) {
                     rows = Math.max(10, Math.floor(height / cell));
                 }
 
-                function randomFood(excludeBody) {
+                function randomFood (excludeBody)
+                {
                     const taken = new Set(excludeBody.map(keyForPoint));
                     let candidate = { x: 0, y: 0 };
                     let attempts = 0;
 
-                    do {
+                    do
+                    {
                         candidate = {
                             x: Math.floor(Math.random() * cols),
                             y: Math.floor(Math.random() * rows)
                         };
                         attempts++;
-                        if (attempts > 5000) {
+                        if (attempts > 5000)
+                        {
                             break;
                         }
                     } while (taken.has(keyForPoint(candidate)) || isFoodBlockedByCard(candidate.x, candidate.y));
@@ -181,23 +193,27 @@ if (!function_exists('render_loading_screen')) {
                     return candidate;
                 }
 
-                function createInitialSnake() {
+                function createInitialSnake ()
+                {
                     const centerX = Math.floor(cols / 2);
                     const centerY = Math.floor(rows / 2);
                     const initialTailBlocks = 5;
                     const body = [];
 
-                    for (let i = 0; i <= initialTailBlocks; i++) {
+                    for (let i = 0; i <= initialTailBlocks; i++)
+                    {
                         body.push({ x: centerX - i, y: centerY });
                     }
 
                     return body;
                 }
 
-                function reconstructPath(node) {
+                function reconstructPath (node)
+                {
                     const full = [];
                     let current = node;
-                    while (current) {
+                    while (current)
+                    {
                         full.push({ x: current.x, y: current.y });
                         current = current.parent;
                     }
@@ -205,7 +221,67 @@ if (!function_exists('render_loading_screen')) {
                     return full.slice(1);
                 }
 
-                function findAStarPath(startBody, target) {
+                function buildStraightPathIfClear (node, target)
+                {
+                    if (node.x !== target.x && node.y !== target.y)
+                    {
+                        return null;
+                    }
+
+                    const occupied = new Set(node.body.slice(1).map(keyForPoint));
+                    const dx = Math.sign(target.x - node.x);
+                    const dy = Math.sign(target.y - node.y);
+                    const straight = [];
+
+                    let x = node.x + dx;
+                    let y = node.y + dy;
+                    while (x !== target.x || y !== target.y)
+                    {
+                        if (occupied.has(x + ',' + y))
+                        {
+                            return null;
+                        }
+                        straight.push({ x: x, y: y });
+                        x += dx;
+                        y += dy;
+                    }
+
+                    straight.push({ x: target.x, y: target.y });
+                    return straight;
+                }
+
+                function orderDirectionsTowardGoal (current, target, directions)
+                {
+                    const goalDx = Math.sign(target.x - current.x);
+                    const goalDy = Math.sign(target.y - current.y);
+                    const prevDx = current.parent ? current.x - current.parent.x : 0;
+                    const prevDy = current.parent ? current.y - current.parent.y : 0;
+
+                    function scoreDirection (dir)
+                    {
+                        let score = 0;
+
+                        if (goalDx !== 0 && dir.x === goalDx)
+                            score += 3;
+                        if (goalDy !== 0 && dir.y === goalDy)
+                            score += 3;
+
+                        if ((prevDx !== 0 || prevDy !== 0) && dir.x === prevDx && dir.y === prevDy)
+                            score += 1.2;
+
+                        if (goalDx !== 0 && dir.x === -goalDx)
+                            score -= 2;
+                        if (goalDy !== 0 && dir.y === -goalDy)
+                            score -= 2;
+
+                        return score;
+                    }
+
+                    return directions.slice().sort((a, b) => scoreDirection(b) - scoreDirection(a));
+                }
+
+                function findAStarPath (startBody, target)
+                {
                     const start = {
                         x: startBody[0].x,
                         y: startBody[0].y,
@@ -231,47 +307,68 @@ if (!function_exists('render_loading_screen')) {
                     let loops = 0;
                     const maxLoops = 12000;
 
-                    while (open.length && loops < maxLoops) {
+                    while (open.length && loops < maxLoops)
+                    {
                         loops++;
                         let bestIndex = 0;
-                        for (let i = 1; i < open.length; i++) {
-                            if (open[i].f < open[bestIndex].f) {
+                        for (let i = 1; i < open.length; i++)
+                        {
+                            if (
+                                open[i].f < open[bestIndex].f
+                                || (open[i].f === open[bestIndex].f && open[i].h < open[bestIndex].h)
+                            )
+                            {
                                 bestIndex = i;
                             }
                         }
                         const current = open.splice(bestIndex, 1)[0];
-                        if (!current) {
+                        if (!current)
+                        {
                             break;
                         }
 
-                        if (current.x === target.x && current.y === target.y) {
+                        if (current.x === target.x && current.y === target.y)
+                        {
                             return reconstructPath(current);
                         }
 
-                        for (const dir of directions) {
+                        const straightTailPath = buildStraightPathIfClear(current, target);
+                        if (straightTailPath)
+                        {
+                            return reconstructPath(current).concat(straightTailPath);
+                        }
+
+                        const orderedDirections = orderDirectionsTowardGoal(current, target, directions);
+                        for (const dir of orderedDirections)
+                        {
                             const nx = current.x + dir.x;
                             const ny = current.y + dir.y;
-                            if (!inBounds(nx, ny)) {
+                            if (!inBounds(nx, ny))
+                            {
                                 continue;
                             }
 
                             const grows = (nx === target.x && ny === target.y);
                             const nextBody = [{ x: nx, y: ny }, ...current.body.map(p => ({ x: p.x, y: p.y }))];
-                            if (!grows) {
+                            if (!grows)
+                            {
                                 nextBody.pop();
                             }
 
                             const occupied = new Set();
                             let collision = false;
-                            for (const part of nextBody) {
+                            for (const part of nextBody)
+                            {
                                 const partKey = keyForPoint(part);
-                                if (occupied.has(partKey)) {
+                                if (occupied.has(partKey))
+                                {
                                     collision = true;
                                     break;
                                 }
                                 occupied.add(partKey);
                             }
-                            if (collision) {
+                            if (collision)
+                            {
                                 continue;
                             }
 
@@ -279,17 +376,24 @@ if (!function_exists('render_loading_screen')) {
                             const h = Math.abs(nx - target.x) + Math.abs(ny - target.y);
                             const stateKey = nx + ',' + ny + '|' + bodyKey(nextBody);
                             const bestKnown = visitedBestG.get(stateKey);
-                            if (bestKnown !== undefined && bestKnown <= g) {
+                            if (bestKnown !== undefined && bestKnown <= g)
+                            {
                                 continue;
                             }
                             visitedBestG.set(stateKey, g);
+
+                            const prevDx = current.parent ? current.x - current.parent.x : 0;
+                            const prevDy = current.parent ? current.y - current.parent.y : 0;
+                            const turnPenalty = (prevDx !== 0 || prevDy !== 0) && (dir.x !== prevDx || dir.y !== prevDy)
+                                ? 0.08
+                                : 0;
 
                             open.push({
                                 x: nx,
                                 y: ny,
                                 g: g,
                                 h: h,
-                                f: g + h,
+                                f: g + (h * 1.15) + turnPenalty,
                                 body: nextBody,
                                 parent: current,
                             });
@@ -299,7 +403,8 @@ if (!function_exists('render_loading_screen')) {
                     return [];
                 }
 
-                function safeFallbackStep() {
+                function safeFallbackStep ()
+                {
                     const head = snake[0];
                     const directions = [
                         { x: 1, y: 0 },
@@ -309,10 +414,12 @@ if (!function_exists('render_loading_screen')) {
                     ];
 
                     const candidates = [];
-                    for (const dir of directions) {
+                    for (const dir of directions)
+                    {
                         const nx = head.x + dir.x;
                         const ny = head.y + dir.y;
-                        if (!inBounds(nx, ny)) {
+                        if (!inBounds(nx, ny))
+                        {
                             continue;
                         }
 
@@ -321,15 +428,18 @@ if (!function_exists('render_loading_screen')) {
 
                         let collision = false;
                         const occupancy = new Set();
-                        for (const part of testBody) {
+                        for (const part of testBody)
+                        {
                             const partKey = keyForPoint(part);
-                            if (occupancy.has(partKey)) {
+                            if (occupancy.has(partKey))
+                            {
                                 collision = true;
                                 break;
                             }
                             occupancy.add(partKey);
                         }
-                        if (collision) {
+                        if (collision)
+                        {
                             continue;
                         }
 
@@ -337,7 +447,8 @@ if (!function_exists('render_loading_screen')) {
                         candidates.push({ x: nx, y: ny, score: score });
                     }
 
-                    if (!candidates.length) {
+                    if (!candidates.length)
+                    {
                         return null;
                     }
 
@@ -345,26 +456,31 @@ if (!function_exists('render_loading_screen')) {
                     return { x: candidates[0].x, y: candidates[0].y };
                 }
 
-                function planPath() {
+                function planPath ()
+                {
                     path = findAStarPath(snake, food);
                     pathPlannedForFood = true;
                 }
 
-                function moveSnake(nextHead) {
+                function moveSnake (nextHead)
+                {
                     const grows = (nextHead.x === food.x && nextHead.y === food.y);
                     snake.unshift(nextHead);
-                    if (!grows) {
+                    if (!grows)
+                    {
                         snake.pop();
                     }
 
-                    if (grows) {
+                    if (grows)
+                    {
                         food = randomFood(snake);
                         path = [];
                         pathPlannedForFood = false;
                     }
                 }
 
-                function draw() {
+                function draw ()
+                {
                     const width = canvas.clientWidth;
                     const height = canvas.clientHeight;
 
@@ -373,46 +489,55 @@ if (!function_exists('render_loading_screen')) {
 
                     ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
                     ctx.lineWidth = 1;
-                    for (let x = 0; x <= cols; x++) {
+                    for (let x = 0; x <= cols; x++)
+                    {
                         ctx.beginPath();
                         ctx.moveTo(x * cell + 0.5, 0);
                         ctx.lineTo(x * cell + 0.5, rows * cell);
                         ctx.stroke();
                     }
-                    for (let y = 0; y <= rows; y++) {
+                    for (let y = 0; y <= rows; y++)
+                    {
                         ctx.beginPath();
                         ctx.moveTo(0, y * cell + 0.5);
                         ctx.lineTo(cols * cell, y * cell + 0.5);
                         ctx.stroke();
                     }
 
-                    ctx.fillStyle = '#ef4444';
+                    ctx.fillStyle = '#44ef44';
                     ctx.fillRect(food.x * cell + 2, food.y * cell + 2, cell - 4, cell - 4);
 
-                    snake.forEach((part, idx) => {
+                    snake.forEach((part, idx) =>
+                    {
                         ctx.fillStyle = idx === 0 ? '#38bdf8' : '#22d3ee';
                         ctx.fillRect(part.x * cell + 2, part.y * cell + 2, cell - 4, cell - 4);
                     });
                 }
 
-                function tick() {
-                    if (!loader.classList.contains('is-visible')) {
+                function tick ()
+                {
+                    if (!loader.classList.contains('is-visible'))
+                    {
                         return;
                     }
 
                     // Bereken maximaal 1x per voedselpositie; daarna alleen het pad volgen.
-                    if (!path.length && !pathPlannedForFood) {
+                    if (!path.length && !pathPlannedForFood)
+                    {
                         planPath();
                     }
 
                     let next = null;
-                    if (path.length) {
+                    if (path.length)
+                    {
                         next = path.shift();
-                    } else {
+                    } else
+                    {
                         next = safeFallbackStep();
                     }
 
-                    if (!next) {
+                    if (!next)
+                    {
                         snake = createInitialSnake();
                         food = randomFood(snake);
                         path = [];
@@ -424,14 +549,17 @@ if (!function_exists('render_loading_screen')) {
                     draw();
                 }
 
-                function startAnimation() {
-                    if (tickTimer) {
+                function startAnimation ()
+                {
+                    if (tickTimer)
+                    {
                         return;
                     }
                     tickTimer = window.setInterval(tick, 85);
                 }
 
-                function initializeBoard() {
+                function initializeBoard ()
+                {
                     resizeCanvas();
                     snake = createInitialSnake();
                     food = randomFood(snake);
@@ -441,11 +569,14 @@ if (!function_exists('render_loading_screen')) {
                     startAnimation();
                 }
 
-                if (!window.showLoadingScreen) {
-                    window.showLoadingScreen = function (targetId) {
+                if (!window.showLoadingScreen)
+                {
+                    window.showLoadingScreen = function (targetId)
+                    {
                         const id = targetId || 'app-loading-screen';
                         const el = document.getElementById(id);
-                        if (!el) {
+                        if (!el)
+                        {
                             return;
                         }
                         el.classList.add('is-visible');
@@ -453,11 +584,14 @@ if (!function_exists('render_loading_screen')) {
                     };
                 }
 
-                if (!window.hideLoadingScreen) {
-                    window.hideLoadingScreen = function (targetId) {
+                if (!window.hideLoadingScreen)
+                {
+                    window.hideLoadingScreen = function (targetId)
+                    {
                         const id = targetId || 'app-loading-screen';
                         const el = document.getElementById(id);
-                        if (!el) {
+                        if (!el)
+                        {
                             return;
                         }
                         el.classList.remove('is-visible');
@@ -470,8 +604,10 @@ if (!function_exists('render_loading_screen')) {
 
                 const redirectUrl = <?= json_encode($redirectUrl) ?>;
                 const redirectDelayMs = <?= (int) $redirectDelayMs ?>;
-                if (redirectUrl) {
-                    window.setTimeout(function () {
+                if (redirectUrl)
+                {
+                    window.setTimeout(function ()
+                    {
                         window.location.href = redirectUrl;
                     }, redirectDelayMs);
                 }
