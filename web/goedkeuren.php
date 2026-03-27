@@ -445,6 +445,7 @@ foreach ($byWeek as $weekStart => $resources) {
         if (!$resourceData['isVakantie'] && !$resourceData['present'] && $isPastWeek) {
             $actionItems[] = [
                 'rowId' => $rowId,
+                'detailId' => null,
                 'weekLabel' => 'Week ' . $weekNo,
                 'resourceName' => (string) ($resourceData['name'] ?? $resourceNo),
                 'type' => 'missing',
@@ -457,6 +458,7 @@ foreach ($byWeek as $weekStart => $resources) {
             $count = (int) $resourceData['unapprovedActionableCount'];
             $actionItems[] = [
                 'rowId' => $rowId,
+                'detailId' => 'detail-' . md5($resourceNo . $weekStart),
                 'weekLabel' => 'Week ' . $weekNo,
                 'resourceName' => (string) ($resourceData['name'] ?? $resourceNo),
                 'type' => 'unapproved',
@@ -1084,7 +1086,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                         <div class="sidebar-list">
                             <?php foreach ($actionItems as $item): ?>
                                 <button type="button" class="sidebar-link"
-                                    onclick="scrollToActionRow('<?= htmlspecialchars($item['rowId']) ?>')">
+                                    onclick="scrollToActionRow('<?= htmlspecialchars($item['rowId']) ?>', <?= $item['detailId'] !== null ? '\'' . htmlspecialchars($item['detailId']) . '\'' : 'null' ?>)">
                                     <span class="sidebar-link-week"><?= htmlspecialchars($item['weekLabel']) ?></span>
                                     <span class="sidebar-link-name"><?= htmlspecialchars($item['resourceName']) ?></span>
                                     <span class="sidebar-link-label"><?= htmlspecialchars($item['label']) ?></span>
@@ -1141,10 +1143,19 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             openDetailId = isOpen ? null : detailId;
         }
 
-        function scrollToActionRow (rowId)
+        function scrollToActionRow (rowId, detailId)
         {
             const row = document.getElementById(rowId);
             if (!row) return;
+
+            if (detailId)
+            {
+                const detailRow = document.getElementById(detailId);
+                if (detailRow && detailRow.style.display === 'none')
+                {
+                    toggleDetail(detailId);
+                }
+            }
 
             row.scrollIntoView({ behavior: 'smooth', block: 'center' });
             row.classList.add('scroll-target-highlight');
