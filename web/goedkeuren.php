@@ -750,6 +750,21 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             font-weight: 700;
         }
 
+        .pending-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 22px;
+            padding: 0 8px;
+            background: #f1f5f9;
+            border: 1px solid #94a3b8;
+            color: #475569;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
         /* Detailrij (accordion) */
         .detail-row>td {
             padding: 0;
@@ -984,14 +999,22 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                 </td>
                                             </tr>
 
+                                        <?php elseif ($isCurrentWeek && (!$rdata['present'] || empty($rdata['lines']))): ?>
+                                            <!-- ======= HUIDIGE WEEK: NOG NIET ONTVANGEN ======= -->
+                                            <tr class="resource-row missing-future">
+                                                <td><span class="pending-badge" title="Nog niet ontvangen">⏳</span></td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td colspan="8" class="missing-label">
+                                                    Nog geen urenstaten ontvangen
+                                                </td>
+                                            </tr>
+
                                         <?php elseif (!$rdata['present']): ?>
-                                            <!-- ======= ONTBREKENDE RIJ – TOEKOMST / HUIDIGE WEEK (grijs) ======= -->
+                                            <!-- ======= ONTBREKENDE RIJ – TOEKOMST (grijs) ======= -->
                                             <tr class="resource-row missing-future">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
-                                                <td colspan="8" class="missing-label">
-                                                    <?= $isCurrentWeek ? 'Urenstaat nog niet ontvangen' : 'Nog geen urenstaat' ?>
-                                                </td>
+                                                <td colspan="8" class="missing-label">Nog geen urenstaat</td>
                                             </tr>
 
                                         <?php else: ?>
