@@ -1103,15 +1103,20 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         const filterFromDate = document.getElementById('fromDate');
         const filterToDate = document.getElementById('toDate');
         let filterSubmitting = false;
+        let loadingScreenTimer = null;
 
         function submitFiltersNow ()
         {
             if (!filterForm || filterSubmitting) return;
             filterSubmitting = true;
-            if (window.showLoadingScreen)
-            {
-                window.showLoadingScreen('page-loading-screen');
-            }
+
+            loadingScreenTimer = window.setTimeout(() => {
+                if (window.showLoadingScreen)
+                {
+                    window.showLoadingScreen('page-loading-screen');
+                }
+            }, 1000);
+
             filterForm.submit();
         }
 
