@@ -234,12 +234,22 @@ if ($selectedApproverUserId === '') {
 // =========================================================
 // RESOURCES VOOR GESELECTEERDE GOEDKEURDER
 // =========================================================
-$resourcesForApprover = []; // resourceNo => naam
+
+$resourcesForApprover = [];
 if ($selectedApproverUserId !== '') {
     foreach ($allResources as $r) {
         $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
         $no = trim((string) ($r['No'] ?? ''));
         if ($auid === $selectedApproverUserId && $no !== '') {
+            $resourcesForApprover[$no] = (string) ($r['Name'] ?? $no);
+        }
+    }
+} else {
+    // Iedereen: alle resources met een goedkeurder
+    foreach ($allResources as $r) {
+        $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
+        $no = trim((string) ($r['No'] ?? ''));
+        if ($auid !== '' && $no !== '') {
             $resourcesForApprover[$no] = (string) ($r['Name'] ?? $no);
         }
     }
@@ -996,7 +1006,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         <form class="filter-form" method="get">
             <label for="approverUserId">Goedkeurder:</label>
             <select id="approverUserId" name="approverUserId" class="btn">
-                <option value="">— selecteer —</option>
+                <option value="">Iedereen</option>
                 <?php foreach ($approverUserIds as $auid): ?>
                     <option value="<?= htmlspecialchars($auid) ?>" <?= $selectedApproverUserId === $auid ? 'selected' : '' ?>>
                         <?= htmlspecialchars($auid) ?>
@@ -1012,12 +1022,14 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
         <div class="layout">
             <div class="main-content">
+                <div class="status-filters" style="margin-bottom:12px; display:flex; gap:8px;">
+                    <button type="button" class="status-filter-btn approvedStatus" data-status="approved" style="font-weight:600;">Goedgekeurd</button>
+                    <button type="button" class="status-filter-btn unapprovedStatus" data-status="unapproved" style="font-weight:600;">Nog niet goedgekeurd</button>
+                    <button type="button" class="status-filter-btn pendingStatus" data-status="pending" style="font-weight:600;">Nog niet ontvangen</button>
+                </div>
 
-                <?php if ($selectedApproverUserId === ''): ?>
-                    <div class="no-data">Selecteer een goedkeurder om urenstaten te bekijken.</div>
-                <?php elseif (empty($resourcesForApprover)): ?>
-                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand
-                        gevonden.</div>
+                <?php if (empty($resourcesForApprover)): ?>
+                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand gevonden.</div>
                 <?php elseif (empty($byWeek)): ?>
                     <div class="no-data">Geen weken gevonden in de geselecteerde periode.</div>
                 <?php else: ?>
@@ -1070,7 +1082,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                         <?php if ($rdata['isVakantie']): ?>
                                             <!-- ======= VAKANTIERIJ ======= -->
-                                            <tr class="resource-row vakantie-row">
+                                            <tr class="resource-row vakantie-row" data-status="vakantie">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
                                                 <td colspan="9" style="text-align:center; color:#15803d; font-weight:600;">
@@ -1080,7 +1092,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                         <?php elseif ((!$rdata['present'] && $isPastWeek) || (!$isCurrentWeek && empty($rdata['lines']))): ?>
                                             <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
-                                            <tr class="resource-row missing-past" id="<?= $rowId ?>">
+                                            <tr class="resource-row missing-past" id="<?= $rowId ?>" data-status="pending">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
                                                 <td colspan="8" class="missing-label" style="color:#dc2626;">
@@ -1099,7 +1111,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                         <?php elseif ($isCurrentWeek && (!$rdata['present'] || empty($rdata['lines']))): ?>
                                             <!-- ======= HUIDIGE WEEK: NOG NIET ONTVANGEN ======= -->
-                                            <tr class="resource-row missing-future">
+                                            <tr class="resource-row missing-future" data-status="pending">
                                                 <td><span class="pending-badge" title="Nog niet ontvangen">⏳</span></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
                                                 <td colspan="9" class="missing-label">
@@ -1109,7 +1121,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                         <?php elseif (!$rdata['present']): ?>
                                             <!-- ======= ONTBREKENDE RIJ – TOEKOMST (grijs) ======= -->
-                                            <tr class="resource-row missing-future">
+                                            <tr class="resource-row missing-future" data-status="pending">
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
                                                 <td colspan="9" class="missing-label">Nog geen urenstaat</td>
@@ -1117,7 +1129,66 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                                         <?php else: ?>
                                             <!-- ======= NORMALE RIJ MET URENSTAAT ======= -->
-                                            <tr class="resource-row" id="<?= $rowId ?>" onclick="toggleDetail('<?= $detailId ?>')">
+                                            <?php
+                                            $rowStatus = 'approved';
+                                            if ($rdata['unapprovedCount'] > 0) {
+                                                $rowStatus = 'unapproved';
+                                            }
+                                            ?>
+                                            <tr class="resource-row" id="<?= $rowId ?>" data-status="<?= $rowStatus ?>" onclick="toggleDetail('<?= $detailId ?>')">
+                                                        <script>
+                                                        // Statusfilterknoppen functionaliteit
+                                                        document.addEventListener('DOMContentLoaded', function () {
+                                                            const btns = document.querySelectorAll('.status-filter-btn');
+                                                            const rows = document.querySelectorAll('.resource-row');
+                                                            const state = { approved: true, unapproved: true, pending: true };
+                                                            btns.forEach(btn => {
+                                                                btn.classList.add('active');
+                                                                btn.addEventListener('click', function () {
+                                                                    const status = btn.dataset.status;
+                                                                    state[status] = !state[status];
+                                                                    btn.classList.toggle('active', state[status]);
+                                                                    rows.forEach(row => {
+                                                                        const rowStatus = row.dataset.status;
+                                                                        if (rowStatus === status) {
+                                                                            row.style.display = state[status] ? '' : 'none';
+                                                                        }
+                                                                    });
+                                                                });
+                                                            });
+                                                        });
+                                                        </script>
+                                                        <style>
+                                                        .status-filter-btn {
+                                                            border: 1px solid #cbd5e1;
+                                                            border-radius: 6px;
+                                                            padding: 4px 14px;
+                                                            cursor: pointer;
+                                                            opacity: 0.85;
+                                                            transition: background 0.15s, color 0.15s, opacity 0.15s;
+                                                        }
+                                                        .status-filter-btn.active {
+                                                            box-shadow: 0 0 0 2px #2563eb33;
+                                                            opacity: 1;
+                                                        }
+                                                        .status-filter-btn:not(.active) {
+                                                            opacity: 0.45;
+                                                            filter: grayscale(0.5);
+                                                        }
+                                                        .status-filter-btn.approvedStatus {
+                                                            background: #dcfce7;
+                                                            color: #166534;
+                                                        }
+                                                        .status-filter-btn.unapprovedStatus {
+                                                            background: #fef3c7;
+                                                            color: #92400e;
+                                                        }
+                                                        .status-filter-btn.pendingStatus {
+                                                            background: #fee2e2;
+                                                            color: #b91c1c;
+                                                            border-color: #fca5a5;
+                                                        }
+                                                        </style>
                                                 <td>
                                                     <?php if ($rdata['unapprovedCount'] > 0): ?>
                                                         <?php $onlyZeroHourUnapproved = (int) ($rdata['unapprovedActionableCount'] ?? 0) === 0; ?>
