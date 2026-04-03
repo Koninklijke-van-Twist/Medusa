@@ -1023,13 +1023,17 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         <div class="layout">
             <div class="main-content">
                 <div class="status-filters" style="margin-bottom:12px; display:flex; gap:8px;">
-                    <button type="button" class="status-filter-btn approvedStatus" data-status="approved" style="font-weight:600;">Goedgekeurd</button>
-                    <button type="button" class="status-filter-btn unapprovedStatus" data-status="unapproved" style="font-weight:600;">Nog niet goedgekeurd</button>
-                    <button type="button" class="status-filter-btn pendingStatus" data-status="pending" style="font-weight:600;">Nog niet ontvangen</button>
+                    <button type="button" class="status-filter-btn approvedStatus" data-status="approved"
+                        style="font-weight:600;">Goedgekeurd</button>
+                    <button type="button" class="status-filter-btn unapprovedStatus" data-status="unapproved"
+                        style="font-weight:600;">Nog niet goedgekeurd</button>
+                    <button type="button" class="status-filter-btn pendingStatus" data-status="pending"
+                        style="font-weight:600;">Nog niet ontvangen</button>
                 </div>
 
                 <?php if (empty($resourcesForApprover)): ?>
-                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand gevonden.</div>
+                    <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand
+                        gevonden.</div>
                 <?php elseif (empty($byWeek)): ?>
                     <div class="no-data">Geen weken gevonden in de geselecteerde periode.</div>
                 <?php else: ?>
@@ -1135,60 +1139,71 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                 $rowStatus = 'unapproved';
                                             }
                                             ?>
-                                            <tr class="resource-row" id="<?= $rowId ?>" data-status="<?= $rowStatus ?>" onclick="toggleDetail('<?= $detailId ?>')">
-                                                        <script>
-                                                        // Statusfilterknoppen functionaliteit
-                                                        document.addEventListener('DOMContentLoaded', function () {
-                                                            const btns = document.querySelectorAll('.status-filter-btn');
-                                                            const rows = document.querySelectorAll('.resource-row');
-                                                            const state = { approved: true, unapproved: true, pending: true };
-                                                            btns.forEach(btn => {
-                                                                btn.classList.add('active');
-                                                                btn.addEventListener('click', function () {
-                                                                    const status = btn.dataset.status;
-                                                                    state[status] = !state[status];
-                                                                    btn.classList.toggle('active', state[status]);
-                                                                    rows.forEach(row => {
-                                                                        const rowStatus = row.dataset.status;
-                                                                        if (rowStatus === status) {
-                                                                            row.style.display = state[status] ? '' : 'none';
-                                                                        }
-                                                                    });
+                                            <tr class="resource-row" id="<?= $rowId ?>" data-status="<?= $rowStatus ?>"
+                                                onclick="toggleDetail('<?= $detailId ?>')">
+                                                <script>
+                                                    // Statusfilterknoppen functionaliteit
+                                                    document.addEventListener('DOMContentLoaded', function ()
+                                                    {
+                                                        const btns = document.querySelectorAll('.status-filter-btn');
+                                                        const rows = document.querySelectorAll('.resource-row');
+                                                        const state = { approved: true, unapproved: true, pending: true };
+                                                        btns.forEach(btn =>
+                                                        {
+                                                            btn.classList.add('active');
+                                                            btn.addEventListener('click', function ()
+                                                            {
+                                                                const status = btn.dataset.status;
+                                                                state[status] = !state[status];
+                                                                btn.classList.toggle('active', state[status]);
+                                                                rows.forEach(row =>
+                                                                {
+                                                                    const rowStatus = row.dataset.status;
+                                                                    if (rowStatus === status)
+                                                                    {
+                                                                        row.style.display = state[status] ? '' : 'none';
+                                                                    }
                                                                 });
                                                             });
                                                         });
-                                                        </script>
-                                                        <style>
-                                                        .status-filter-btn {
-                                                            border: 1px solid #cbd5e1;
-                                                            border-radius: 6px;
-                                                            padding: 4px 14px;
-                                                            cursor: pointer;
-                                                            opacity: 0.85;
-                                                            transition: background 0.15s, color 0.15s, opacity 0.15s;
-                                                        }
-                                                        .status-filter-btn.active {
-                                                            box-shadow: 0 0 0 2px #2563eb33;
-                                                            opacity: 1;
-                                                        }
-                                                        .status-filter-btn:not(.active) {
-                                                            opacity: 0.45;
-                                                            filter: grayscale(0.5);
-                                                        }
-                                                        .status-filter-btn.approvedStatus {
-                                                            background: #dcfce7;
-                                                            color: #166534;
-                                                        }
-                                                        .status-filter-btn.unapprovedStatus {
-                                                            background: #fef3c7;
-                                                            color: #92400e;
-                                                        }
-                                                        .status-filter-btn.pendingStatus {
-                                                            background: #fee2e2;
-                                                            color: #b91c1c;
-                                                            border-color: #fca5a5;
-                                                        }
-                                                        </style>
+                                                    });
+                                                </script>
+                                                <style>
+                                                    .status-filter-btn {
+                                                        border: 1px solid #cbd5e1;
+                                                        border-radius: 6px;
+                                                        padding: 4px 14px;
+                                                        cursor: pointer;
+                                                        opacity: 0.85;
+                                                        transition: background 0.15s, color 0.15s, opacity 0.15s;
+                                                    }
+
+                                                    .status-filter-btn.active {
+                                                        box-shadow: 0 0 0 2px #2563eb33;
+                                                        opacity: 1;
+                                                    }
+
+                                                    .status-filter-btn:not(.active) {
+                                                        opacity: 0.45;
+                                                        filter: grayscale(0.5);
+                                                    }
+
+                                                    .status-filter-btn.approvedStatus {
+                                                        background: #dcfce7;
+                                                        color: #166534;
+                                                    }
+
+                                                    .status-filter-btn.unapprovedStatus {
+                                                        background: #fef3c7;
+                                                        color: #92400e;
+                                                    }
+
+                                                    .status-filter-btn.pendingStatus {
+                                                        background: #fee2e2;
+                                                        color: #b91c1c;
+                                                        border-color: #fca5a5;
+                                                    }
+                                                </style>
                                                 <td>
                                                     <?php if ($rdata['unapprovedCount'] > 0): ?>
                                                         <?php $onlyZeroHourUnapproved = (int) ($rdata['unapprovedActionableCount'] ?? 0) === 0; ?>
@@ -1258,7 +1273,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                             <?php if (!empty($statusMetUitleg)): ?>
                                                                 <div class="status-uitleg">
                                                                     <?php foreach ($statusMetUitleg as $statusInfo): ?>
-                                                                        <div class="status-uitleg-regel <?= gk_status_class((string) $statusInfo['status']) ?>">
+                                                                        <div
+                                                                            class="status-uitleg-regel <?= gk_status_class((string) $statusInfo['status']) ?>">
                                                                             <strong><?= htmlspecialchars((string) $statusInfo['status']) ?></strong>
                                                                             <?= htmlspecialchars((string) $statusInfo['uitleg']) ?>
                                                                         </div>
