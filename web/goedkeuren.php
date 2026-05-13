@@ -29,6 +29,7 @@ register_shutdown_function(function () {
 
 require __DIR__ . "/odata.php";
 require __DIR__ . "/auth.php";
+require_once __DIR__ . "/auth_helper.php";
 require __DIR__ . "/lib_times.php";
 require __DIR__ . "/logincheck.php";
 require_once __DIR__ . "/loadingscreen.php";
@@ -86,6 +87,26 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
 }
 
 $selectedApproverUserId = trim((string) ($_GET['approverUserId'] ?? ''));
+
+// =========================================================
+// BEDRIJF EN OMGEVING BEPALEN
+// =========================================================
+$companyDiscovery = auth_discover_companies_across_active_environments($day);
+$allCompanies = $companyDiscovery['companies'];
+
+$selectedCompany = trim((string) ($_GET['company'] ?? ''));
+if ($selectedCompany === '' || !in_array($selectedCompany, $allCompanies, true)) {
+    $selectedCompany = (string) ($allCompanies[0] ?? '');
+}
+
+$selectedEnvironment = $selectedCompany !== ''
+    ? auth_get_environment_for_company($selectedCompany, $day)
+    : '';
+
+$auth = $selectedEnvironment !== '' ? auth_get_auth_for_environment($selectedEnvironment) : [];
+$base = $selectedCompany !== '' && $selectedEnvironment !== ''
+    ? auth_build_company_base_url($selectedCompany, $selectedEnvironment)
+    : '';
 
 // =========================================================
 // HELPERS
@@ -202,8 +223,43 @@ function gk_is_vakantie(string $resourceNo, string $weekStart): bool
 // =========================================================
 // OPHALEN: ALLE RESOURCES (voor goedkeurder-dropdown)
 // =========================================================
-$allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID&\$format=json";
-$allResources = odata_get_all($allResourcesUrl, $auth, $day);
+$allResources = [];
+$allResourcesFetchError = '';
+$allResourcesDebugPayload = null;
+$resourceListDebugPayload = null;
+$allResourcesUrl = '';
+$recentTsUrl = '';
+$debugResourceCounts = [
+    'all_resources_total' => 0,
+    'after_approver_filter' => 0,
+    'after_recent_activity_filter' => null,
+];
+$recentFilterDecoded = "Ending_Date ge $recentActivityFrom and Starting_Date le $today";
+$recentTsDebugUrl = $base !== ''
+    ? $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No"
+    . "&\$filter=" . rawurlencode($recentFilterDecoded) . "&\$format=json"
+    : '';
+if ($base !== '') {
+    $allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID&\$format=json";
+    try {
+        $allResources = odata_get_all($allResourcesUrl, $auth, $day);
+    } catch (Throwable $e) {
+        $allResourcesFetchError = $e->getMessage();
+        $allResources = [];
+    }
+
+    if ($allResources === []) {
+        $allResourcesDebugPayload = [
+            'selected_company' => $selectedCompany,
+            'selected_environment' => $selectedEnvironment,
+            'auth_mode' => (string) ($auth['mode'] ?? ''),
+            'auth_user' => (string) ($auth['user'] ?? ''),
+            'fetch_error' => $allResourcesFetchError,
+            'raw_response' => odata_debug_fetch_raw($allResourcesUrl, $auth),
+        ];
+    }
+}
+$debugResourceCounts['all_resources_total'] = count($allResources);
 
 $approverUserIds = [];
 foreach ($allResources as $r) {
@@ -254,11 +310,10 @@ if ($selectedApproverUserId !== '') {
         }
     }
 }
+$debugResourceCounts['after_approver_filter'] = count($resourcesForApprover);
 
 if ($resourcesForApprover) {
-    $recentFilterDecoded = "Ending_Date ge $recentActivityFrom and Starting_Date le $today";
-    $recentTsUrl = $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No"
-        . "&\$filter=" . rawurlencode($recentFilterDecoded) . "&\$format=json";
+    $recentTsUrl = $recentTsDebugUrl;
     $recentTsRows = odata_get_all($recentTsUrl, $auth, $day);
 
     $recentTsByNo = [];
@@ -305,6 +360,7 @@ if ($resourcesForApprover) {
     } else {
         $resourcesForApprover = [];
     }
+    $debugResourceCounts['after_recent_activity_filter'] = count($resourcesForApprover);
 
     if ($autoFromMode && $resourcesForApprover) {
         $weekStartsWithData = [];
@@ -360,6 +416,21 @@ if ($resourcesForApprover) {
             $from = (string) ($firstWeekStarts[0] ?? $from);
         }
     }
+}
+
+if (empty($resourcesForApprover)) {
+    $resourceListDebugPayload = [
+        'selected_company' => $selectedCompany,
+        'selected_environment' => $selectedEnvironment,
+        'selected_approver_user_id' => $selectedApproverUserId,
+        'auth_mode' => (string) ($auth['mode'] ?? ''),
+        'auth_user' => (string) ($auth['user'] ?? ''),
+        'base_url' => $base,
+        'fetch_error' => $allResourcesFetchError,
+        'counts' => $debugResourceCounts,
+        'raw_response_app_resource' => $allResourcesUrl !== '' ? odata_debug_fetch_raw($allResourcesUrl, $auth) : null,
+        'raw_response_recent_urenstaten' => $recentTsDebugUrl !== '' ? odata_debug_fetch_raw($recentTsDebugUrl, $auth) : null,
+    ];
 }
 
 // =========================================================
@@ -942,6 +1013,35 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             font-size: 14px;
         }
 
+        .debug-raw-wrap {
+            margin-top: 12px;
+        }
+
+        .debug-raw-btn {
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #0f172a;
+        }
+
+        .debug-raw-panel {
+            display: none;
+            margin-top: 8px;
+            padding: 10px;
+            background: #0f172a;
+            color: #e2e8f0;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            text-align: left;
+            max-height: 320px;
+            overflow: auto;
+            font-size: 11px;
+        }
+
         .muted {
             color: #64748b;
         }
@@ -1004,6 +1104,14 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
         <!-- Filter formulier -->
         <form class="filter-form" method="get">
+            <label for="companySelect">Bedrijf:</label>
+            <select id="companySelect" name="company" class="btn">
+                <?php foreach ($allCompanies as $co): ?>
+                    <option value="<?= htmlspecialchars($co) ?>" <?= $selectedCompany === $co ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($co) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
             <label for="approverUserId">Goedkeurder:</label>
             <select id="approverUserId" name="approverUserId" class="btn">
                 <option value="">Iedereen</option>
@@ -1033,7 +1141,16 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                 <?php if (empty($resourcesForApprover)): ?>
                     <div class="no-data">Voor deze goedkeurder zijn geen resources met urenstaten in de afgelopen maand
-                        gevonden.</div>
+                        gevonden.
+                        <?php if (is_array($resourceListDebugPayload) || is_array($allResourcesDebugPayload)): ?>
+                            <div class="debug-raw-wrap">
+                                <button type="button" class="debug-raw-btn" onclick="toggleRawDebugPanel()">
+                                    Toon laatste ruwe BC-response (resource-lijst)
+                                </button>
+                                <pre id="rawDebugPanel" class="debug-raw-panel"><?= htmlspecialchars(json_encode(is_array($resourceListDebugPayload) ? $resourceListDebugPayload : $allResourcesDebugPayload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 <?php elseif (empty($byWeek)): ?>
                     <div class="no-data">Geen weken gevonden in de geselecteerde periode.</div>
                 <?php else: ?>
@@ -1394,6 +1511,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
     <script>
         const filterForm = document.querySelector('.filter-form');
+        const filterCompany = document.getElementById('companySelect');
         const filterApprover = document.getElementById('approverUserId');
         const filterFromDate = document.getElementById('fromDate');
         const filterToDate = document.getElementById('toDate');
@@ -1418,6 +1536,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             filterForm.submit();
         }
 
+        if (filterCompany) filterCompany.addEventListener('change', submitFiltersNow);
         if (filterApprover) filterApprover.addEventListener('change', submitFiltersNow);
         if (filterFromDate) filterFromDate.addEventListener('change', submitFiltersNow);
         if (filterToDate) filterToDate.addEventListener('change', submitFiltersNow);
@@ -1536,6 +1655,13 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                     }
                 })
                 .catch(() => alert('Kon de vakantie niet opslaan. Probeer het opnieuw.'));
+        }
+
+        function toggleRawDebugPanel ()
+        {
+            const panel = document.getElementById('rawDebugPanel');
+            if (!panel) return;
+            panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
         }
     </script>
 </body>

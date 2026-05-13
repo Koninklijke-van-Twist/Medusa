@@ -85,11 +85,47 @@ function odata_get_json(string $url, array $auth): array
     return $json;
 }
 
+function odata_debug_fetch_raw(string $url, array $auth): array
+{
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTPHEADER => [
+            "Accept: application/json",
+        ],
+    ]);
+
+    if (($auth['mode'] ?? '') === 'basic') {
+        curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+        curl_setopt($ch, CURLOPT_USERPWD, (string) ($auth['user'] ?? '') . ":" . (string) ($auth['pass'] ?? ''));
+    } elseif (($auth['mode'] ?? '') === 'ntlm') {
+        curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_NTLM);
+        curl_setopt($ch, CURLOPT_USERPWD, (string) ($auth['user'] ?? '') . ":" . (string) ($auth['pass'] ?? ''));
+    }
+
+    $raw = curl_exec($ch);
+    $curlError = $raw === false ? (string) curl_error($ch) : '';
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return [
+        'requested_at' => date('c'),
+        'url' => $url,
+        'http_code' => $code,
+        'auth_mode' => (string) ($auth['mode'] ?? ''),
+        'auth_user' => (string) ($auth['user'] ?? ''),
+        'curl_error' => $curlError,
+        'raw' => is_string($raw) ? $raw : '',
+    ];
+}
+
 function build_cache_key(string $url, array $auth): string
 {
     require __DIR__ . "/auth.php";
     $user = (string) ($auth['user'] ?? '');
-    return $url . '|' . $user . '|' . $environment;
+    $envKey = is_array($environment ?? null) ? implode(',', $environment) : (string) ($environment ?? '');
+    return $url . '|' . $user . '|' . $envKey;
 }
 
 function cache_base_dir(): string
