@@ -87,6 +87,7 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
 }
 
 $selectedApproverUserId = trim((string) ($_GET['approverUserId'] ?? ''));
+$debugTerminated = array_key_exists('debug_terminated', $_GET);
 
 // =========================================================
 // BEDRIJF EN OMGEVING BEPALEN
@@ -220,6 +221,39 @@ function gk_is_vakantie(string $resourceNo, string $weekStart): bool
     return is_file(__DIR__ . '/cache/vakantie/' . $key . '.json');
 }
 
+function gk_is_valid_ymd(string $value): bool
+{
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1;
+}
+
+function gk_is_missing_row(array $resourceData, bool $isPastWeek, bool $isCurrentWeek): bool
+{
+    return !$resourceData['isVakantie']
+        && (
+            (!$resourceData['present'] && $isPastWeek)
+            || (!$isCurrentWeek && empty($resourceData['lines']))
+        );
+}
+
+function gk_week_is_after_termination(string $weekEnd, string $terminationDate): bool
+{
+    if (!gk_is_valid_ymd($weekEnd) || !gk_is_valid_ymd($terminationDate)) {
+        return false;
+    }
+
+    // BC gebruikt 0001-01-01 als lege/sentinel datum.
+    if ($terminationDate === '0001-01-01') {
+        return false;
+    }
+
+    return $weekEnd > $terminationDate;
+}
+
+function gk_has_no_timesheet_for_week(array $resourceData): bool
+{
+    return !$resourceData['present'] || empty($resourceData['lines']);
+}
+
 // =========================================================
 // OPHALEN: ALLE RESOURCES (voor goedkeurder-dropdown)
 // =========================================================
@@ -240,7 +274,7 @@ $recentTsDebugUrl = $base !== ''
     . "&\$filter=" . rawurlencode($recentFilterDecoded) . "&\$format=json"
     : '';
 if ($base !== '') {
-    $allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID&\$format=json";
+    $allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID,LVS_Termination_Date&\$format=json";
     try {
         $allResources = odata_get_all($allResourcesUrl, $auth, $day);
     } catch (Throwable $e) {
@@ -297,7 +331,10 @@ if ($selectedApproverUserId !== '') {
         $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
         $no = trim((string) ($r['No'] ?? ''));
         if ($auid === $selectedApproverUserId && $no !== '') {
-            $resourcesForApprover[$no] = (string) ($r['Name'] ?? $no);
+            $resourcesForApprover[$no] = [
+                'name' => (string) ($r['Name'] ?? $no),
+                'terminationDate' => trim((string) ($r['LVS_Termination_Date'] ?? '')),
+            ];
         }
     }
 } else {
@@ -306,7 +343,10 @@ if ($selectedApproverUserId !== '') {
         $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
         $no = trim((string) ($r['No'] ?? ''));
         if ($auid !== '' && $no !== '') {
-            $resourcesForApprover[$no] = (string) ($r['Name'] ?? $no);
+            $resourcesForApprover[$no] = [
+                'name' => (string) ($r['Name'] ?? $no),
+                'terminationDate' => trim((string) ($r['LVS_Termination_Date'] ?? '')),
+            ];
         }
     }
 }
@@ -442,9 +482,10 @@ $byWeek = []; // weekStart => [ rno => {...} ]
 
 foreach ($weekStarts as $ws) {
     $byWeek[$ws] = [];
-    foreach ($resourcesForApprover as $rno => $rname) {
+    foreach ($resourcesForApprover as $rno => $resourceInfo) {
         $byWeek[$ws][$rno] = [
-            'name' => $rname,
+            'name' => (string) ($resourceInfo['name'] ?? $rno),
+            'terminationDate' => (string) ($resourceInfo['terminationDate'] ?? ''),
             'tsNo' => null,
             'dayTotals' => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             'unapprovedCount' => 0,
@@ -595,11 +636,15 @@ foreach ($byWeek as $weekStart => $resources) {
     foreach ($resources as $resourceNo => $resourceData) {
         $rowId = 'row-' . md5($resourceNo . $weekStart);
 
-        $shouldTreatAsMissing = !$resourceData['isVakantie']
-            && (
-                (!$resourceData['present'] && $isPastWeek)
-                || (!$isCurrentWeek && empty($resourceData['lines']))
-            );
+        $shouldTreatAsMissing = gk_is_missing_row($resourceData, $isPastWeek, $isCurrentWeek);
+        $weekAfterTermination = gk_week_is_after_termination(
+            $weekEnd,
+            (string) ($resourceData['terminationDate'] ?? '')
+        );
+
+        if ($shouldTreatAsMissing && $weekAfterTermination) {
+            continue;
+        }
 
         if ($shouldTreatAsMissing) {
             $actionItems[] = [
@@ -866,6 +911,17 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
         .resource-row.missing-future:hover {
             background: #f1f5f9;
+        }
+
+        /* Debug: rijen die normaal verborgen worden na uitdienstdatum */
+        .resource-row.terminated-debug {
+            background: #dbeafe;
+            color: #1d4ed8;
+            cursor: default;
+        }
+
+        .resource-row.terminated-debug:hover {
+            background: #bfdbfe;
         }
 
         /* Vakantierij: lichtgroen */
@@ -1199,6 +1255,17 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                         <?php
                                         $rowId = 'row-' . md5($rno . $weekStart);
                                         $detailId = 'detail-' . md5($rno . $weekStart);
+                                        $isMissingRow = gk_is_missing_row($rdata, $isPastWeek, $isCurrentWeek);
+                                        $hasNoTimesheetForWeek = gk_has_no_timesheet_for_week($rdata);
+                                        $terminationDate = (string) ($rdata['terminationDate'] ?? '');
+                                        $weekAfterTermination = gk_week_is_after_termination(
+                                            $weekEnd,
+                                            $terminationDate
+                                        );
+                                        $showTerminatedDebugRow = $debugTerminated && $hasNoTimesheetForWeek && $weekAfterTermination;
+                                        if (!$showTerminatedDebugRow && $hasNoTimesheetForWeek && $weekAfterTermination) {
+                                            continue;
+                                        }
                                         ?>
 
                                         <?php if ($rdata['isVakantie']): ?>
@@ -1211,7 +1278,17 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                 </td>
                                             </tr>
 
-                                        <?php elseif ((!$rdata['present'] && $isPastWeek) || (!$isCurrentWeek && empty($rdata['lines']))): ?>
+                                        <?php elseif ($showTerminatedDebugRow): ?>
+                                            <!-- ======= DEBUG RIJ: UIT DIENST ======= -->
+                                            <tr class="resource-row terminated-debug" data-status="pending">
+                                                <td></td>
+                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td colspan="9" class="missing-label" style="color:#1d4ed8; font-weight:700;">
+                                                    UIT DIENST SINDS <?= htmlspecialchars($terminationDate) ?>
+                                                </td>
+                                            </tr>
+
+                                        <?php elseif ($isMissingRow): ?>
                                             <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
                                             <tr class="resource-row missing-past" id="<?= $rowId ?>" data-status="pending">
                                                 <td></td>
