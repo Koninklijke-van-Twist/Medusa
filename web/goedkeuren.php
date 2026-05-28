@@ -86,7 +86,19 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
     $to = $today;
 }
 
-$selectedApproverUserId = trim((string) ($_GET['approverUserId'] ?? ''));
+$sessionEmail = trim((string) ($_SESSION['user']['email'] ?? ''));
+$userFilterPrefs = user_pref_load($sessionEmail, 'goedkeuren_filters');
+
+$detectMissingFutureTimesheets = true;
+$detectMissingFutureRaw = $_GET['cfg_detect_missing_future_ts'] ?? null;
+if ($detectMissingFutureRaw !== null) {
+    $detectMissingFutureRaw = strtolower(trim((string) $detectMissingFutureRaw));
+    $detectMissingFutureTimesheets = in_array($detectMissingFutureRaw, ['1', 'true', 'on', 'yes'], true);
+} elseif (array_key_exists('detectMissingFutureTimesheets', $userFilterPrefs)) {
+    $detectMissingFutureTimesheets = (bool) $userFilterPrefs['detectMissingFutureTimesheets'];
+}
+
+$selectedApproverUserId = trim((string) ($_GET['approverUserId'] ?? ($userFilterPrefs['approverUserId'] ?? '')));
 $debugTerminated = array_key_exists('debug_terminated', $_GET);
 
 // =========================================================
@@ -95,7 +107,7 @@ $debugTerminated = array_key_exists('debug_terminated', $_GET);
 $companyDiscovery = auth_discover_companies_across_active_environments($day);
 $allCompanies = $companyDiscovery['companies'];
 
-$selectedCompany = trim((string) ($_GET['company'] ?? ''));
+$selectedCompany = trim((string) ($_GET['company'] ?? ($userFilterPrefs['company'] ?? '')));
 if ($selectedCompany === '' || !in_array($selectedCompany, $allCompanies, true)) {
     $selectedCompany = (string) ($allCompanies[0] ?? '');
 }
@@ -249,9 +261,102 @@ function gk_week_is_after_termination(string $weekEnd, string $terminationDate):
     return $weekEnd > $terminationDate;
 }
 
+function gk_normalize_termination_date(string $terminationDate): string
+{
+    if (!gk_is_valid_ymd($terminationDate)) {
+        return '';
+    }
+
+    if ($terminationDate === '0001-01-01') {
+        return '';
+    }
+
+    return $terminationDate;
+}
+
+function gk_fetch_future_timesheets_for_resources(
+    string $base,
+    array $auth,
+    int $ttl,
+    array $resourceNos,
+    string $fromDate,
+    string $toDate,
+    int $chunkSize = 50
+): array {
+    $resourceNos = array_values(array_unique(array_filter(array_map(
+        fn($resourceNo) => trim((string) $resourceNo),
+        $resourceNos
+    ), fn($resourceNo) => $resourceNo !== '')));
+
+    if ($base === '' || !$resourceNos || !gk_is_valid_ymd($fromDate) || !gk_is_valid_ymd($toDate)) {
+        return [];
+    }
+
+    $rows = [];
+    foreach (array_chunk($resourceNos, $chunkSize) as $chunk) {
+        $resourceFilter = implode(' or ', array_map(
+            fn($resourceNo) => "Resource_No eq '" . str_replace("'", "''", (string) $resourceNo) . "'",
+            $chunk
+        ));
+
+        if ($resourceFilter === '') {
+            continue;
+        }
+
+        $filterDecoded = "Starting_Date ge {$fromDate} and Starting_Date le {$toDate} and ({$resourceFilter})";
+        $url = $base . "Urenstaten?\$select=No,Resource_No,Starting_Date,Ending_Date"
+            . "&\$filter=" . rawurlencode($filterDecoded)
+            . "&\$format=json";
+
+        $chunkRows = odata_get_all($url, $auth, $ttl);
+        if (!$chunkRows) {
+            continue;
+        }
+
+        foreach ($chunkRows as $row) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
 function gk_has_no_timesheet_for_week(array $resourceData): bool
 {
     return !$resourceData['present'] || empty($resourceData['lines']);
+}
+
+function gk_sum_line_hours(array $line): float
+{
+    $sum = 0.0;
+    for ($i = 1; $i <= 7; $i++) {
+        $sum += (float) ($line["Field{$i}"] ?? 0);
+    }
+    return $sum;
+}
+
+function gk_classify_hours_bucket(array $line): ?string
+{
+    $workType = strtoupper(trim((string) ($line['Work_Type_Code'] ?? '')));
+    if ($workType === 'KM') {
+        return null;
+    }
+
+    $projectCode = strtoupper(trim((string) ($line['Job_No'] ?? '')));
+    if ($projectCode === '') {
+        $projectCode = strtoupper(trim((string) ($line['Job_Task_No'] ?? '')));
+    }
+
+    $ignoredProjects = ['VAK', 'ZK', 'TVT', 'BV', 'FD'];
+    if (in_array($projectCode, $ignoredProjects, true)) {
+        return null;
+    }
+
+    if ($projectCode === 'IA' || ($projectCode === '' && str_contains($workType, 'IA'))) {
+        return 'indirect';
+    }
+
+    return 'direct';
 }
 
 // =========================================================
@@ -305,11 +410,14 @@ foreach ($allResources as $r) {
 $approverUserIds = array_keys($approverUserIds);
 sort($approverUserIds, SORT_NATURAL | SORT_FLAG_CASE);
 
+if ($selectedApproverUserId !== '' && !in_array($selectedApproverUserId, $approverUserIds, true)) {
+    $selectedApproverUserId = '';
+}
+
 // =========================================================
 // AUTO-SELECT OP BASIS VAN SESSION-EMAIL
 // =========================================================
 if ($selectedApproverUserId === '') {
-    $sessionEmail = (string) ($_SESSION['user']['email'] ?? '');
     if ($sessionEmail !== '') {
         $emailPrefix = strtoupper(explode('@', $sessionEmail)[0]);
         foreach ($approverUserIds as $auid) {
@@ -319,6 +427,14 @@ if ($selectedApproverUserId === '') {
             }
         }
     }
+}
+
+if ($sessionEmail !== '') {
+    user_pref_save($sessionEmail, 'goedkeuren_filters', [
+        'company' => $selectedCompany,
+        'approverUserId' => $selectedApproverUserId,
+        'detectMissingFutureTimesheets' => $detectMissingFutureTimesheets,
+    ]);
 }
 
 // =========================================================
@@ -331,9 +447,12 @@ if ($selectedApproverUserId !== '') {
         $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
         $no = trim((string) ($r['No'] ?? ''));
         if ($auid === $selectedApproverUserId && $no !== '') {
+            $terminationDate = trim((string) ($r['LVS_Termination_Date'] ?? ''));
             $resourcesForApprover[$no] = [
                 'name' => (string) ($r['Name'] ?? $no),
-                'terminationDate' => trim((string) ($r['LVS_Termination_Date'] ?? '')),
+                'terminationDate' => $terminationDate,
+                'effectiveTerminationDate' => gk_normalize_termination_date($terminationDate),
+                'effectiveTerminationSource' => 'bc',
             ];
         }
     }
@@ -343,9 +462,12 @@ if ($selectedApproverUserId !== '') {
         $auid = trim((string) ($r['Time_Sheet_Approver_User_ID'] ?? ''));
         $no = trim((string) ($r['No'] ?? ''));
         if ($auid !== '' && $no !== '') {
+            $terminationDate = trim((string) ($r['LVS_Termination_Date'] ?? ''));
             $resourcesForApprover[$no] = [
                 'name' => (string) ($r['Name'] ?? $no),
-                'terminationDate' => trim((string) ($r['LVS_Termination_Date'] ?? '')),
+                'terminationDate' => $terminationDate,
+                'effectiveTerminationDate' => gk_normalize_termination_date($terminationDate),
+                'effectiveTerminationSource' => 'bc',
             ];
         }
     }
@@ -458,6 +580,87 @@ if ($resourcesForApprover) {
     }
 }
 
+$futureTimesheetDetectionDebug = [
+    'enabled' => $detectMissingFutureTimesheets,
+    'lookahead_from' => $from,
+    'lookahead_to' => date('Y-m-d', strtotime('+1 year')),
+    'resources_without_future_timesheets' => 0,
+    'resources_cutoff_detected' => 0,
+];
+
+if ($detectMissingFutureTimesheets && $resourcesForApprover) {
+    $selectedWeekStarts = week_starts_for_range($from, $to);
+    $futureTsRows = [];
+    try {
+        $futureTsRows = gk_fetch_future_timesheets_for_resources(
+            $base,
+            $auth,
+            $day,
+            array_keys($resourcesForApprover),
+            (string) $futureTimesheetDetectionDebug['lookahead_from'],
+            (string) $futureTimesheetDetectionDebug['lookahead_to']
+        );
+    } catch (Throwable $e) {
+        $futureTsRows = [];
+    }
+
+    $resourceHasFutureTimesheet = [];
+    $resourceHasTimesheetByWeek = [];
+    foreach ($futureTsRows as $futureTsRow) {
+        $resourceNo = trim((string) ($futureTsRow['Resource_No'] ?? ''));
+        if ($resourceNo !== '' && isset($resourcesForApprover[$resourceNo])) {
+            $resourceHasFutureTimesheet[$resourceNo] = true;
+
+            $startDate = (string) ($futureTsRow['Starting_Date'] ?? '');
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
+                try {
+                    $weekStart = (new DateTimeImmutable($startDate))->modify('monday this week')->format('Y-m-d');
+                    $resourceHasTimesheetByWeek[$resourceNo][$weekStart] = true;
+                } catch (Exception $e) {
+                    // Negeer onparsebare datums in diagnose-logica.
+                }
+            }
+        }
+    }
+
+    foreach ($resourcesForApprover as $resourceNo => &$resourceInfo) {
+        $effectiveTerminationDate = gk_normalize_termination_date((string) ($resourceInfo['terminationDate'] ?? ''));
+        if ($effectiveTerminationDate !== '') {
+            $resourceInfo['effectiveTerminationDate'] = $effectiveTerminationDate;
+            $resourceInfo['effectiveTerminationSource'] = 'bc';
+            continue;
+        }
+
+        $firstMissingAfterExistingWeek = null;
+        $seenExistingWeek = false;
+        foreach ($selectedWeekStarts as $weekStart) {
+            if (isset($resourceHasTimesheetByWeek[$resourceNo][$weekStart])) {
+                $seenExistingWeek = true;
+                continue;
+            }
+
+            if ($seenExistingWeek) {
+                $firstMissingAfterExistingWeek = $weekStart;
+                break;
+            }
+        }
+
+        if ($firstMissingAfterExistingWeek !== null) {
+            $resourceInfo['effectiveTerminationDate'] = $firstMissingAfterExistingWeek;
+            $resourceInfo['effectiveTerminationSource'] = 'missing-future-timesheets';
+            $futureTimesheetDetectionDebug['resources_cutoff_detected']++;
+            continue;
+        }
+
+        if (!isset($resourceHasFutureTimesheet[$resourceNo])) {
+            $resourceInfo['effectiveTerminationDate'] = (string) $futureTimesheetDetectionDebug['lookahead_from'];
+            $resourceInfo['effectiveTerminationSource'] = 'missing-future-timesheets';
+            $futureTimesheetDetectionDebug['resources_without_future_timesheets']++;
+        }
+    }
+    unset($resourceInfo);
+}
+
 if (empty($resourcesForApprover)) {
     $resourceListDebugPayload = [
         'selected_company' => $selectedCompany,
@@ -468,6 +671,7 @@ if (empty($resourcesForApprover)) {
         'base_url' => $base,
         'fetch_error' => $allResourcesFetchError,
         'counts' => $debugResourceCounts,
+        'future_timesheet_detection' => $futureTimesheetDetectionDebug,
         'raw_response_app_resource' => $allResourcesUrl !== '' ? odata_debug_fetch_raw($allResourcesUrl, $auth) : null,
         'raw_response_recent_urenstaten' => $recentTsDebugUrl !== '' ? odata_debug_fetch_raw($recentTsDebugUrl, $auth) : null,
     ];
@@ -486,8 +690,13 @@ foreach ($weekStarts as $ws) {
         $byWeek[$ws][$rno] = [
             'name' => (string) ($resourceInfo['name'] ?? $rno),
             'terminationDate' => (string) ($resourceInfo['terminationDate'] ?? ''),
+            'effectiveTerminationDate' => (string) ($resourceInfo['effectiveTerminationDate'] ?? ''),
+            'effectiveTerminationSource' => (string) ($resourceInfo['effectiveTerminationSource'] ?? 'bc'),
             'tsNo' => null,
+            'timesheetHeader' => null,
             'dayTotals' => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            'indirectHours' => 0.0,
+            'directHours' => 0.0,
             'unapprovedCount' => 0,
             'unapprovedActionableCount' => 0,
             'hasUnapproved' => false,
@@ -504,7 +713,9 @@ foreach ($weekStarts as $ws) {
 if ($resourcesForApprover && $weekStarts) {
     // Haal alle urenstaten op die het datumbereik overlappen
     $filterDecoded = "Ending_Date ge $from and Starting_Date le $to";
-    $tsUrl = $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No,Resource_Name"
+    $tsUrl = $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No,Resource_Name,"
+        . "Quantity,Quantity_Open,Quantity_Submitted,Quantity_Approved,Quantity_Rejected,"
+        . "LVS_Approved_Exists,LVS_Open_Exists,LVS_Rejected_Exists"
         . "&\$filter=" . rawurlencode($filterDecoded) . "&\$format=json";
     $tsRows = odata_get_all($tsUrl, $auth, $day);
 
@@ -551,7 +762,34 @@ if ($resourcesForApprover && $weekStarts) {
             if ($byWeek[$weekStart][$rno]['tsNo'] === null) {
                 $byWeek[$weekStart][$rno]['tsNo'] = $tsNo;
             }
+            if ($byWeek[$weekStart][$rno]['timesheetHeader'] === null) {
+                $byWeek[$weekStart][$rno]['timesheetHeader'] = [
+                    'No' => (string) ($tsByNo[$tsNo]['No'] ?? ''),
+                    'Starting_Date' => (string) ($tsByNo[$tsNo]['Starting_Date'] ?? ''),
+                    'Ending_Date' => (string) ($tsByNo[$tsNo]['Ending_Date'] ?? ''),
+                    'Resource_No' => (string) ($tsByNo[$tsNo]['Resource_No'] ?? ''),
+                    'Resource_Name' => (string) ($tsByNo[$tsNo]['Resource_Name'] ?? ''),
+                    'Quantity' => (string) ($tsByNo[$tsNo]['Quantity'] ?? ''),
+                    'Quantity_Open' => (string) ($tsByNo[$tsNo]['Quantity_Open'] ?? ''),
+                    'Quantity_Submitted' => (string) ($tsByNo[$tsNo]['Quantity_Submitted'] ?? ''),
+                    'Quantity_Approved' => (string) ($tsByNo[$tsNo]['Quantity_Approved'] ?? ''),
+                    'Quantity_Rejected' => (string) ($tsByNo[$tsNo]['Quantity_Rejected'] ?? ''),
+                    'LVS_Approved_Exists' => (string) ($tsByNo[$tsNo]['LVS_Approved_Exists'] ?? ''),
+                    'LVS_Open_Exists' => (string) ($tsByNo[$tsNo]['LVS_Open_Exists'] ?? ''),
+                    'LVS_Rejected_Exists' => (string) ($tsByNo[$tsNo]['LVS_Rejected_Exists'] ?? ''),
+                ];
+            }
             $byWeek[$weekStart][$rno]['lines'][] = $l;
+
+            $bucket = gk_classify_hours_bucket($l);
+            if ($bucket !== null) {
+                $lineHours = gk_sum_line_hours($l);
+                if ($bucket === 'indirect') {
+                    $byWeek[$weekStart][$rno]['indirectHours'] += $lineHours;
+                } else {
+                    $byWeek[$weekStart][$rno]['directHours'] += $lineHours;
+                }
+            }
 
             if ($status !== 'Approved') {
                 $byWeek[$weekStart][$rno]['hasUnapproved'] = true;
@@ -585,6 +823,23 @@ if ($resourcesForApprover && $weekStarts) {
         $byWeek[$weekStart][$rno]['present'] = true;
         if ($byWeek[$weekStart][$rno]['tsNo'] === null) {
             $byWeek[$weekStart][$rno]['tsNo'] = $tsNo;
+        }
+        if ($byWeek[$weekStart][$rno]['timesheetHeader'] === null) {
+            $byWeek[$weekStart][$rno]['timesheetHeader'] = [
+                'No' => (string) ($t['No'] ?? ''),
+                'Starting_Date' => (string) ($t['Starting_Date'] ?? ''),
+                'Ending_Date' => (string) ($t['Ending_Date'] ?? ''),
+                'Resource_No' => (string) ($t['Resource_No'] ?? ''),
+                'Resource_Name' => (string) ($t['Resource_Name'] ?? ''),
+                'Quantity' => (string) ($t['Quantity'] ?? ''),
+                'Quantity_Open' => (string) ($t['Quantity_Open'] ?? ''),
+                'Quantity_Submitted' => (string) ($t['Quantity_Submitted'] ?? ''),
+                'Quantity_Approved' => (string) ($t['Quantity_Approved'] ?? ''),
+                'Quantity_Rejected' => (string) ($t['Quantity_Rejected'] ?? ''),
+                'LVS_Approved_Exists' => (string) ($t['LVS_Approved_Exists'] ?? ''),
+                'LVS_Open_Exists' => (string) ($t['LVS_Open_Exists'] ?? ''),
+                'LVS_Rejected_Exists' => (string) ($t['LVS_Rejected_Exists'] ?? ''),
+            ];
         }
     }
 }
@@ -639,7 +894,7 @@ foreach ($byWeek as $weekStart => $resources) {
         $shouldTreatAsMissing = gk_is_missing_row($resourceData, $isPastWeek, $isCurrentWeek);
         $weekAfterTermination = gk_week_is_after_termination(
             $weekEnd,
-            (string) ($resourceData['terminationDate'] ?? '')
+            (string) ($resourceData['effectiveTerminationDate'] ?? '')
         );
 
         if ($shouldTreatAsMissing && $weekAfterTermination) {
@@ -785,6 +1040,147 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             font-size: 12px;
             color: #7c2d12;
             margin-top: 2px;
+        }
+
+        .config-open-btn {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 1200;
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            color: #0f172a;
+            border-radius: 999px;
+            font-size: 12px;
+            padding: 6px 12px;
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12);
+        }
+
+        .config-open-btn:hover {
+            background: #f8fafc;
+        }
+
+        .config-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 1300;
+            background: rgba(15, 23, 42, 0.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .config-modal[hidden] {
+            display: none;
+        }
+
+        .config-modal-card {
+            width: min(830px, 100%);
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 14px;
+            padding: 14px;
+            box-shadow: 0 24px 42px rgba(15, 23, 42, 0.2);
+        }
+
+        .config-modal-title {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .config-modal-description {
+            margin: 0 0 12px;
+            color: #475569;
+            font-size: 13px;
+        }
+
+        .config-option {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            font-size: 13px;
+            color: #0f172a;
+        }
+
+        .config-option small {
+            display: block;
+            margin-top: 2px;
+            color: #64748b;
+        }
+
+        .config-modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .missing-resource-cell {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .missing-bc-btn {
+            border: 1px solid #fca5a5;
+            border-radius: 999px;
+            background: #fee2e2;
+            color: #b91c1c;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            cursor: pointer;
+        }
+
+        .missing-bc-btn:hover {
+            background: #fecaca;
+            border-color: #ef4444;
+        }
+
+        .bc-modal-content {
+            margin-top: 6px;
+        }
+
+        .bc-modal-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .bc-modal-table th,
+        .bc-modal-table td {
+            border-bottom: 1px solid #fee2e2;
+            padding: 8px;
+            font-size: 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .bc-modal-table th {
+            width: 180px;
+            background: #fef2f2;
+            color: #991b1b;
+            font-weight: 700;
+        }
+
+        .bc-modal-note {
+            margin: 0;
+            font-size: 13px;
+            color: #475569;
+        }
+
+        .ratio-indirect-btn {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 6px;
+            min-width: 52px;
+            text-align: center;
         }
 
         h1 {
@@ -1149,6 +1545,53 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         'visible' => false,
     ]) ?>
 
+    <button type="button" id="openConfigBtn" class="config-open-btn" aria-haspopup="dialog">
+        Instellingen
+    </button>
+
+    <div id="configModal" class="config-modal" hidden>
+        <div class="config-modal-card" role="dialog" aria-modal="true" aria-labelledby="configModalTitle">
+            <h2 id="configModalTitle" class="config-modal-title">Instellingen</h2>
+            <p class="config-modal-description">Deze instellingen worden per gebruiker opgeslagen.</p>
+            <form method="get">
+                <input type="hidden" name="company" value="<?= htmlspecialchars($selectedCompany) ?>">
+                <input type="hidden" name="approverUserId" value="<?= htmlspecialchars($selectedApproverUserId) ?>">
+                <input type="hidden" name="from" value="<?= htmlspecialchars($from) ?>">
+                <input type="hidden" name="to" value="<?= htmlspecialchars($to) ?>">
+                <?php if ($debugTerminated): ?>
+                    <input type="hidden" name="debug_terminated" value="1">
+                <?php endif; ?>
+
+                <label class="config-option" for="cfgDetectMissingFutureTsCheckbox">
+                    <input type="hidden" name="cfg_detect_missing_future_ts" value="0">
+                    <input type="checkbox" id="cfgDetectMissingFutureTsCheckbox" name="cfg_detect_missing_future_ts"
+                        value="1" <?= $detectMissingFutureTimesheets ? 'checked' : '' ?>>
+                    <span>
+                        Behandel resource zonder toekomstige weekstaten als uit dienst
+                        <small>Verbergt ontbrekende weken vanaf het gekozen startpunt als toekomstige urenstaten
+                            wegvallen.</small>
+                    </span>
+                </label>
+
+                <div class="config-modal-actions">
+                    <button type="button" class="btn" id="closeConfigBtn">Annuleren</button>
+                    <button type="submit" class="btn">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="missingBcModal" class="config-modal" hidden>
+        <div class="config-modal-card" role="dialog" aria-modal="true" aria-labelledby="missingBcModalTitle">
+            <h2 id="missingBcModalTitle" class="config-modal-title">BC-gegevens bij ontbrekende urenstaat</h2>
+            <p class="config-modal-description">Dit toont wat er voor deze week/resource in BC gevonden is.</p>
+            <div id="missingBcModalContent" class="bc-modal-content"></div>
+            <div class="config-modal-actions" style="margin-top:12px;">
+                <button type="button" class="btn" id="closeMissingBcBtn">Sluiten</button>
+            </div>
+        </div>
+    </div>
+
     <div class="wrap">
         <?= injectTimerHtml([
             'statusUrl' => 'odata.php?action=cache_status',
@@ -1160,6 +1603,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
         <!-- Filter formulier -->
         <form class="filter-form" method="get">
+            <input type="hidden" name="cfg_detect_missing_future_ts"
+                value="<?= $detectMissingFutureTimesheets ? '1' : '0' ?>">
             <label for="companySelect">Bedrijf:</label>
             <select id="companySelect" name="company" class="btn">
                 <?php foreach ($allCompanies as $co): ?>
@@ -1203,7 +1648,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                 <button type="button" class="debug-raw-btn" onclick="toggleRawDebugPanel()">
                                     Toon laatste ruwe BC-response (resource-lijst)
                                 </button>
-                                <pre id="rawDebugPanel" class="debug-raw-panel"><?= htmlspecialchars(json_encode(is_array($resourceListDebugPayload) ? $resourceListDebugPayload : $allResourcesDebugPayload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
+                                <pre id="rawDebugPanel"
+                                    class="debug-raw-panel"><?= htmlspecialchars(json_encode(is_array($resourceListDebugPayload) ? $resourceListDebugPayload : $allResourcesDebugPayload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1247,7 +1693,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                     class="muted"><?= (new DateTimeImmutable($weekDates[$d]))->format('j/n') ?></span>
                                             </th>
                                         <?php endfor; ?>
-                                        <th></th><!-- vakantieknop kolom -->
+                                        <th>Direct</th><!-- vakantieknop kolom -->
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1257,7 +1703,8 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                         $detailId = 'detail-' . md5($rno . $weekStart);
                                         $isMissingRow = gk_is_missing_row($rdata, $isPastWeek, $isCurrentWeek);
                                         $hasNoTimesheetForWeek = gk_has_no_timesheet_for_week($rdata);
-                                        $terminationDate = (string) ($rdata['terminationDate'] ?? '');
+                                        $terminationDate = (string) ($rdata['effectiveTerminationDate'] ?? '');
+                                        $terminationSource = (string) ($rdata['effectiveTerminationSource'] ?? 'bc');
                                         $weekAfterTermination = gk_week_is_after_termination(
                                             $weekEnd,
                                             $terminationDate
@@ -1284,15 +1731,45 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                 <td></td>
                                                 <td><?= htmlspecialchars($rdata['name']) ?></td>
                                                 <td colspan="9" class="missing-label" style="color:#1d4ed8; font-weight:700;">
-                                                    UIT DIENST SINDS <?= htmlspecialchars($terminationDate) ?>
+                                                    <?php if ($terminationSource === 'missing-future-timesheets'): ?>
+                                                        VERBORGEN: GEEN TOEKOMSTIGE WEEKSTATEN (vanaf
+                                                        <?= htmlspecialchars($terminationDate) ?>)
+                                                    <?php else: ?>
+                                                        UIT DIENST SINDS <?= htmlspecialchars($terminationDate) ?>
+                                                    <?php endif; ?>
                                                 </td>
                                             </tr>
 
                                         <?php elseif ($isMissingRow): ?>
                                             <!-- ======= ONTBREKENDE RIJ – VERLEDEN (rood) ======= -->
+                                            <?php
+                                            $missingBcSnapshot = [
+                                                'company' => $selectedCompany,
+                                                'resourceNo' => $rno,
+                                                'resourceName' => (string) ($rdata['name'] ?? ''),
+                                                'weekStart' => $weekStart,
+                                                'weekEnd' => $weekEnd,
+                                                'timesheetFound' => (bool) ($rdata['present'] ?? false),
+                                                'timesheetNo' => (string) ($rdata['tsNo'] ?? ''),
+                                                'lineCount' => count((array) ($rdata['lines'] ?? [])),
+                                                'timesheetHeader' => is_array($rdata['timesheetHeader'] ?? null) ? $rdata['timesheetHeader'] : null,
+                                            ];
+                                            $missingBcSnapshotJson = htmlspecialchars(
+                                                json_encode($missingBcSnapshot, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            );
+                                            ?>
                                             <tr class="resource-row missing-past" id="<?= $rowId ?>" data-status="pending">
                                                 <td></td>
-                                                <td><?= htmlspecialchars($rdata['name']) ?></td>
+                                                <td class="missing-resource-cell">
+                                                    <span><?= htmlspecialchars($rdata['name']) ?></span>
+                                                    <button type="button" class="missing-bc-btn" title="Bekijk BC-gegevens"
+                                                        data-bc-snapshot="<?= $missingBcSnapshotJson ?>"
+                                                        onclick="openMissingBcModal(this); event.stopPropagation();">
+                                                        Bekijk BC
+                                                    </button>
+                                                </td>
                                                 <td colspan="8" class="missing-label" style="color:#dc2626;">
                                                     Urenstaat ontbreekt
                                                 </td>
@@ -1420,7 +1897,24 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                         <?= htmlspecialchars(gk_hhmm($rdata['dayTotals'][$d])) ?>
                                                     </td>
                                                 <?php endfor; ?>
-                                                <td></td>
+                                                <td>
+                                                    <?php
+                                                    $directHours = (float) ($rdata['directHours'] ?? 0);
+                                                    $indirectHours = (float) ($rdata['indirectHours'] ?? 0);
+                                                    $ratioText = 'n.v.t.';
+                                                    $ratioTitle = 'Geen directe uren beschikbaar voor IA/direct-berekening';
+                                                    if ($directHours > 0) {
+                                                        $ratio = (1 - ($indirectHours / $directHours)) * 100;
+                                                        $ratioText = number_format($ratio, 0, ',', '.') . '%';
+                                                        $ratioTitle = 'Indirecte uren: ' . gk_hhmm($indirectHours)
+                                                            . ' | Directe uren: ' . gk_hhmm($directHours)
+                                                            . ' | IA/Direct';
+                                                    }
+                                                    ?>
+                                                    <span class="ratio-indirect-btn" title="<?= htmlspecialchars($ratioTitle) ?>">
+                                                        <?= htmlspecialchars($ratioText) ?>
+                                                    </span>
+                                                </td>
                                             </tr>
 
                                             <!-- ======= DETAILRIJ (accordion, standaard verborgen) ======= -->
@@ -1592,10 +2086,145 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         const filterApprover = document.getElementById('approverUserId');
         const filterFromDate = document.getElementById('fromDate');
         const filterToDate = document.getElementById('toDate');
+        const openConfigBtn = document.getElementById('openConfigBtn');
+        const closeConfigBtn = document.getElementById('closeConfigBtn');
+        const configModal = document.getElementById('configModal');
+        const missingBcModal = document.getElementById('missingBcModal');
+        const closeMissingBcBtn = document.getElementById('closeMissingBcBtn');
+        const missingBcModalContent = document.getElementById('missingBcModalContent');
         const approvalSidebar = document.getElementById('approval-sidebar');
         const approvalSidebarList = document.getElementById('approval-sidebar-list');
         let filterSubmitting = false;
         let loadingScreenTimer = null;
+
+        function openConfigModal ()
+        {
+            if (!configModal) return;
+            configModal.hidden = false;
+        }
+
+        function closeConfigModal ()
+        {
+            if (!configModal) return;
+            configModal.hidden = true;
+        }
+
+        function escapeHtml (value)
+        {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function renderBcRow (label, value)
+        {
+            return '<tr><th>' + escapeHtml(label) + '</th><td>' + escapeHtml(value) + '</td></tr>';
+        }
+
+        function closeMissingBcModal ()
+        {
+            if (!missingBcModal) return;
+            missingBcModal.hidden = true;
+        }
+
+        function openMissingBcModal (btn)
+        {
+            if (!missingBcModal || !missingBcModalContent) return;
+
+            const payloadRaw = btn?.dataset?.bcSnapshot || '{}';
+            let payload = {};
+            try
+            {
+                payload = JSON.parse(payloadRaw);
+            } catch (error)
+            {
+                payload = {};
+            }
+
+            const timesheet = payload.timesheetHeader || null;
+            const found = Boolean(payload.timesheetFound);
+            const headerExists = Boolean(timesheet && typeof timesheet === 'object');
+
+            const parseNumber = (value) =>
+            {
+                const normalized = String(value ?? '').trim().replace(',', '.');
+                const numberValue = Number(normalized);
+                return Number.isFinite(numberValue) ? numberValue : 0;
+            };
+            const parseBoolean = (value) =>
+            {
+                const normalized = String(value ?? '').trim().toLowerCase();
+                return normalized === '1' || normalized === 'true' || normalized === 'yes';
+            };
+
+            const qtyOpen = parseNumber(timesheet?.Quantity_Open);
+            const qtySubmitted = parseNumber(timesheet?.Quantity_Submitted);
+            const qtyApproved = parseNumber(timesheet?.Quantity_Approved);
+            const qtyRejected = parseNumber(timesheet?.Quantity_Rejected);
+            const hasOpen = parseBoolean(timesheet?.LVS_Open_Exists) || qtyOpen > 0;
+            const hasRejected = parseBoolean(timesheet?.LVS_Rejected_Exists) || qtyRejected > 0;
+            const hasApproved = parseBoolean(timesheet?.LVS_Approved_Exists) || qtyApproved > 0;
+
+            let statusText = 'Er is geen urenlijst voor deze week.';
+            if (found && headerExists)
+            {
+                if (!hasOpen && !hasRejected && !hasApproved && qtySubmitted <= 0 && qtyOpen <= 0 && qtyApproved <= 0 && qtyRejected <= 0)
+                {
+                    statusText = 'Er is een urenlijst in BC, maar hij is nog niet ingevuld.';
+                }
+                else if (hasRejected)
+                {
+                    statusText = 'Er is een urenlijst in BC, maar hij is afgekeurd.';
+                }
+                else if (qtySubmitted > 0)
+                {
+                    statusText = 'Er is een urenlijst in BC, en hij is verstuurd ter goedkeuring.';
+                }
+                else if (hasOpen)
+                {
+                    statusText = 'Er is een urenlijst in BC, maar hij staat nog open en is niet verstuurd.';
+                }
+                else if (hasApproved && qtyOpen <= 0 && qtySubmitted <= 0 && qtyRejected <= 0)
+                {
+                    statusText = 'Er is een urenlijst in BC, en hij is goedgekeurd.';
+                }
+                else
+                {
+                    statusText = 'Er is een urenlijst in BC, met een gemengde status.';
+                }
+            }
+            else if (found)
+            {
+                statusText = 'Er is een urenlijst in BC, maar de status kon niet bepaald worden.';
+            }
+
+            const rows = [];
+            rows.push(renderBcRow('Bedrijf', payload.company || ''));
+            rows.push(renderBcRow('Resource', payload.resourceName || ''));
+            rows.push(renderBcRow('Resource nr.', payload.resourceNo || ''));
+            rows.push(renderBcRow('Week start', payload.weekStart || ''));
+            rows.push(renderBcRow('Week einde', payload.weekEnd || ''));
+            rows.push(renderBcRow('Urenstaat gevonden', found ? 'Ja' : 'Nee'));
+            rows.push(renderBcRow('Regels gevonden', payload.lineCount ?? '0'));
+            rows.push(renderBcRow('Urenstaat nr.', (timesheet?.No || payload.timesheetNo || '')));
+            rows.push(renderBcRow('Header startdatum', timesheet?.Starting_Date || ''));
+            rows.push(renderBcRow('Header einddatum', timesheet?.Ending_Date || ''));
+            rows.push(renderBcRow('Header resource nr.', timesheet?.Resource_No || ''));
+            rows.push(renderBcRow('Header resource naam', timesheet?.Resource_Name || ''));
+            rows.push(renderBcRow('Aantal open', timesheet?.Quantity_Open || '0'));
+            rows.push(renderBcRow('Aantal verstuurd', timesheet?.Quantity_Submitted || '0'));
+            rows.push(renderBcRow('Aantal goedgekeurd', timesheet?.Quantity_Approved || '0'));
+            rows.push(renderBcRow('Aantal afgekeurd', timesheet?.Quantity_Rejected || '0'));
+
+            missingBcModalContent.innerHTML =
+                '<p class="bc-modal-note">' + escapeHtml(statusText) + '</p>'
+                + '<table class="bc-modal-table"><tbody>' + rows.join('') + '</tbody></table>';
+
+            missingBcModal.hidden = false;
+        }
 
         function submitFiltersNow ()
         {
@@ -1617,6 +2246,41 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         if (filterApprover) filterApprover.addEventListener('change', submitFiltersNow);
         if (filterFromDate) filterFromDate.addEventListener('change', submitFiltersNow);
         if (filterToDate) filterToDate.addEventListener('change', submitFiltersNow);
+        if (openConfigBtn) openConfigBtn.addEventListener('click', openConfigModal);
+        if (closeConfigBtn) closeConfigBtn.addEventListener('click', closeConfigModal);
+        if (closeMissingBcBtn) closeMissingBcBtn.addEventListener('click', closeMissingBcModal);
+        if (configModal)
+        {
+            configModal.addEventListener('click', function (event)
+            {
+                if (event.target === configModal)
+                {
+                    closeConfigModal();
+                }
+            });
+        }
+        if (missingBcModal)
+        {
+            missingBcModal.addEventListener('click', function (event)
+            {
+                if (event.target === missingBcModal)
+                {
+                    closeMissingBcModal();
+                }
+            });
+        }
+
+        document.addEventListener('keydown', function (event)
+        {
+            if (event.key === 'Escape' && configModal && !configModal.hidden)
+            {
+                closeConfigModal();
+            }
+            if (event.key === 'Escape' && missingBcModal && !missingBcModal.hidden)
+            {
+                closeMissingBcModal();
+            }
+        });
 
         // ── Accordion: maximaal 1 detailrij tegelijk open ──────────────────────
         let openDetailId = null;

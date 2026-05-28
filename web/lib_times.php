@@ -165,3 +165,54 @@ function detect_hour_entry_issues(array $lines, bool $approvedOnly = false): arr
     'hasIssues' => $hasIssues,
   ];
 }
+
+function user_pref_file_path(string $userEmail, string $scope): string
+{
+  $normalizedEmail = strtolower(trim($userEmail));
+  if ($normalizedEmail === '') {
+    return '';
+  }
+
+  $safeScope = preg_replace('/[^a-z0-9_-]+/i', '_', trim($scope));
+  $safeScope = $safeScope !== null ? trim($safeScope, '_') : '';
+  if ($safeScope === '') {
+    $safeScope = 'default';
+  }
+
+  $dir = __DIR__ . '/cache/user_prefs';
+  return $dir . '/' . $safeScope . '_' . hash('sha256', $normalizedEmail) . '.json';
+}
+
+function user_pref_load(string $userEmail, string $scope): array
+{
+  $path = user_pref_file_path($userEmail, $scope);
+  if ($path === '' || !is_file($path)) {
+    return [];
+  }
+
+  $raw = file_get_contents($path);
+  if ($raw === false) {
+    return [];
+  }
+
+  $data = json_decode($raw, true);
+  return is_array($data) ? $data : [];
+}
+
+function user_pref_save(string $userEmail, string $scope, array $values): bool
+{
+  $path = user_pref_file_path($userEmail, $scope);
+  if ($path === '') {
+    return false;
+  }
+
+  $dir = dirname($path);
+  if (!is_dir($dir) && !mkdir($dir, 0777, true) && !is_dir($dir)) {
+    return false;
+  }
+
+  $existing = user_pref_load($userEmail, $scope);
+  $merged = array_merge($existing, $values);
+
+  return file_put_contents($path, json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX) !== false;
+}
