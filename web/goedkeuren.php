@@ -335,6 +335,21 @@ function gk_sum_line_hours(array $line): float
     return $sum;
 }
 
+function gk_extract_workorder_code(array $line): string
+{
+    $code = strtoupper(trim((string) ($line['Job_Task_No'] ?? '')));
+    if ($code !== '') {
+        return $code;
+    }
+
+    $code = strtoupper(trim((string) ($line['Job_No'] ?? '')));
+    if ($code !== '') {
+        return $code;
+    }
+
+    return strtoupper(trim((string) ($line['Work_Type_Code'] ?? '')));
+}
+
 function gk_classify_hours_bucket(array $line): ?string
 {
     $workType = strtoupper(trim((string) ($line['Work_Type_Code'] ?? '')));
@@ -342,18 +357,16 @@ function gk_classify_hours_bucket(array $line): ?string
         return null;
     }
 
-    $projectCode = strtoupper(trim((string) ($line['Job_No'] ?? '')));
-    if ($projectCode === '') {
-        $projectCode = strtoupper(trim((string) ($line['Job_Task_No'] ?? '')));
-    }
+    $projectCode = gk_extract_workorder_code($line);
 
-    $ignoredProjects = ['VAK', 'ZK', 'TVT', 'BV', 'FD'];
-    if (in_array($projectCode, $ignoredProjects, true)) {
-        return null;
+    if (in_array($projectCode, ['IA', 'ITH', 'TR'], true)) {
+        return 'improductive';
     }
-
-    if ($projectCode === 'IA' || ($projectCode === '' && str_contains($workType, 'IA'))) {
-        return 'indirect';
+    if (in_array($projectCode, ['VAK', 'TVT', 'BV', 'OV', 'FD', 'GA', 'ZV'], true)) {
+        return 'verlof';
+    }
+    if (in_array($projectCode, ['ZK', 'DK'], true)) {
+        return 'ziek';
     }
 
     return 'direct';
@@ -695,8 +708,12 @@ foreach ($weekStarts as $ws) {
             'tsNo' => null,
             'timesheetHeader' => null,
             'dayTotals' => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            'indirectHours' => 0.0,
+            'totalHours' => 0.0,
             'directHours' => 0.0,
+            'improductiveHours' => 0.0,
+            'verlofHours' => 0.0,
+            'ziekHours' => 0.0,
+            'hoursByCode' => [],
             'unapprovedCount' => 0,
             'unapprovedActionableCount' => 0,
             'hasUnapproved' => false,
@@ -757,6 +774,7 @@ if ($resourcesForApprover && $weekStarts) {
 
             $workType = (string) ($l['Work_Type_Code'] ?? '');
             $status = (string) ($l['Status'] ?? '');
+            $isApproved = (strcasecmp(trim($status), 'Approved') === 0);
 
             $byWeek[$weekStart][$rno]['present'] = true;
             if ($byWeek[$weekStart][$rno]['tsNo'] === null) {
@@ -782,16 +800,32 @@ if ($resourcesForApprover && $weekStarts) {
             $byWeek[$weekStart][$rno]['lines'][] = $l;
 
             $bucket = gk_classify_hours_bucket($l);
-            if ($bucket !== null) {
+            if ($isApproved && $bucket !== null) {
                 $lineHours = gk_sum_line_hours($l);
-                if ($bucket === 'indirect') {
-                    $byWeek[$weekStart][$rno]['indirectHours'] += $lineHours;
-                } else {
+                $byWeek[$weekStart][$rno]['totalHours'] += $lineHours;
+
+                // Bepaal effectieve code voor breakdown per code
+                $efCode = gk_extract_workorder_code($l);
+
+                if ($bucket === 'direct') {
                     $byWeek[$weekStart][$rno]['directHours'] += $lineHours;
+                } else {
+                    // Track per code voor improductief/verlof/ziek
+                    if ($efCode !== '') {
+                        $byWeek[$weekStart][$rno]['hoursByCode'][$efCode] =
+                            ($byWeek[$weekStart][$rno]['hoursByCode'][$efCode] ?? 0.0) + $lineHours;
+                    }
+                    if ($bucket === 'improductive') {
+                        $byWeek[$weekStart][$rno]['improductiveHours'] += $lineHours;
+                    } elseif ($bucket === 'verlof') {
+                        $byWeek[$weekStart][$rno]['verlofHours'] += $lineHours;
+                    } elseif ($bucket === 'ziek') {
+                        $byWeek[$weekStart][$rno]['ziekHours'] += $lineHours;
+                    }
                 }
             }
 
-            if ($status !== 'Approved') {
+            if (!$isApproved) {
                 $byWeek[$weekStart][$rno]['hasUnapproved'] = true;
                 $byWeek[$weekStart][$rno]['unapprovedCount']++;
 
@@ -1175,12 +1209,56 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         }
 
         .ratio-indirect-btn {
-            display: inline-block;
+            --ratio-hue: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             font-size: 11px;
+            font-family: inherit;
             font-weight: 700;
-            padding: 2px 6px;
-            min-width: 52px;
+            padding: 3px 8px;
+            min-width: 58px;
             text-align: center;
+            cursor: pointer;
+            border: 1px solid hsl(var(--ratio-hue) 75% 34% / 0.65);
+            border-radius: 999px;
+            color: hsl(var(--ratio-hue) 80% 14%);
+            background:
+                linear-gradient(180deg, hsl(var(--ratio-hue) 88% 95%), hsl(var(--ratio-hue) 82% 82%));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 1px 2px rgba(15, 23, 42, 0.15);
+            transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+        }
+
+        .ratio-indirect-btn:hover {
+            filter: brightness(0.98);
+            transform: translateY(-1px);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 3px 6px rgba(15, 23, 42, 0.18);
+        }
+
+        .ratio-indirect-btn:active {
+            transform: translateY(0);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 2px rgba(15, 23, 42, 0.14);
+        }
+
+        .ratio-indirect-btn:focus-visible {
+            outline: 2px solid #0ea5e9;
+            outline-offset: 2px;
+        }
+
+        .ratio-indirect-btn.ratio-na {
+            border-color: #cbd5e1;
+            color: #475569;
+            background: linear-gradient(180deg, #f8fafc, #e2e8f0);
+        }
+
+        .ratio-breakdown {
+            color: #6b7280;
+            font-size: 11px;
+        }
+
+        .ratio-breakdown [title] {
+            border-bottom: 1px dotted #9ca3af;
+            cursor: help;
         }
 
         h1 {
@@ -1592,6 +1670,17 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         </div>
     </div>
 
+    <div id="ratioDetailModal" class="config-modal" hidden>
+        <div class="config-modal-card" role="dialog" aria-modal="true" aria-labelledby="ratioDetailModalTitle"
+            style="max-width:480px;">
+            <h2 id="ratioDetailModalTitle" class="config-modal-title">Urenverdeling</h2>
+            <div id="ratioDetailModalContent" class="bc-modal-content"></div>
+            <div class="config-modal-actions" style="margin-top:12px;">
+                <button type="button" class="btn" id="closeRatioDetailBtn">Sluiten</button>
+            </div>
+        </div>
+    </div>
+
     <div class="wrap">
         <?= injectTimerHtml([
             'statusUrl' => 'odata.php?action=cache_status',
@@ -1900,20 +1989,32 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                 <td>
                                                     <?php
                                                     $directHours = (float) ($rdata['directHours'] ?? 0);
-                                                    $indirectHours = (float) ($rdata['indirectHours'] ?? 0);
+                                                    $improductiveHours = (float) ($rdata['improductiveHours'] ?? 0);
                                                     $ratioText = 'n.v.t.';
-                                                    $ratioTitle = 'Geen directe uren beschikbaar voor IA/direct-berekening';
-                                                    if ($directHours > 0) {
-                                                        $ratio = (1 - ($indirectHours / $directHours)) * 100;
+                                                    $ratioPercent = null;
+                                                    $ratioBaseHours = $directHours + $improductiveHours;
+                                                    if ($ratioBaseHours > 0) {
+                                                        $ratio = (1 - ($improductiveHours / $ratioBaseHours)) * 100;
+                                                        $ratioPercent = max(0.0, min(100.0, $ratio));
                                                         $ratioText = number_format($ratio, 0, ',', '.') . '%';
-                                                        $ratioTitle = 'Indirecte uren: ' . gk_hhmm($indirectHours)
-                                                            . ' | Directe uren: ' . gk_hhmm($directHours)
-                                                            . ' | IA/Direct';
                                                     }
+                                                    $ratioDataJson = json_encode([
+                                                        'totalHours' => round((float) ($rdata['totalHours'] ?? 0), 4),
+                                                        'directHours' => round($directHours, 4),
+                                                        'improductiveHours' => round($improductiveHours, 4),
+                                                        'verlofHours' => round((float) ($rdata['verlofHours'] ?? 0), 4),
+                                                        'ziekHours' => round((float) ($rdata['ziekHours'] ?? 0), 4),
+                                                        'hoursByCode' => (object) ($rdata['hoursByCode'] ?? []),
+                                                    ], JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT);
+                                                    $ratioHue = $ratioPercent === null ? 0 : (int) round(($ratioPercent / 100) * 120);
+                                                    $ratioClass = $ratioPercent === null ? ' ratio-na' : '';
                                                     ?>
-                                                    <span class="ratio-indirect-btn" title="<?= htmlspecialchars($ratioTitle) ?>">
+                                                    <button type="button" class="ratio-indirect-btn<?= $ratioClass ?>" title="Klik voor urenverdeling"
+                                                        style="--ratio-hue: <?= $ratioHue ?>"
+                                                        data-ratio="<?= htmlspecialchars($ratioDataJson, ENT_QUOTES, 'UTF-8') ?>"
+                                                        onclick="openRatioModal(this); event.stopPropagation();">
                                                         <?= htmlspecialchars($ratioText) ?>
-                                                    </span>
+                                                    </button>
                                                 </td>
                                             </tr>
 
@@ -1975,7 +2076,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                                         <th style="text-align:left">Regel</th>
                                                                         <th style="text-align:left">Type</th>
                                                                         <th style="text-align:left">Omschrijving</th>
-                                                                        <th>Project</th>
+                                                                        <th>Werkorder</th>
                                                                         <th>Status</th>
                                                                         <?php foreach ($DAY_NAMES as $dn): ?>
                                                                             <th><?= $dn ?></th>
@@ -2092,6 +2193,9 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         const missingBcModal = document.getElementById('missingBcModal');
         const closeMissingBcBtn = document.getElementById('closeMissingBcBtn');
         const missingBcModalContent = document.getElementById('missingBcModalContent');
+        const ratioDetailModal = document.getElementById('ratioDetailModal');
+        const closeRatioDetailBtn = document.getElementById('closeRatioDetailBtn');
+        const ratioDetailModalContent = document.getElementById('ratioDetailModalContent');
         const approvalSidebar = document.getElementById('approval-sidebar');
         const approvalSidebarList = document.getElementById('approval-sidebar-list');
         let filterSubmitting = false;
@@ -2128,6 +2232,98 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         {
             if (!missingBcModal) return;
             missingBcModal.hidden = true;
+        }
+
+        // ── Ratio-detail modal ─────────────────────────────────────────────────
+        function hoursToHHMM (h)
+        {
+            const totalMin = Math.round(Math.abs(h) * 60);
+            const sign = h < 0 ? '-' : '';
+            const hh = Math.floor(totalMin / 60);
+            const mm = totalMin % 60;
+            return sign + hh + ':' + String(mm).padStart(2, '0');
+        }
+
+        const CODE_LABELS = {
+            IA: 'Intern Algemeen',
+            ITH: 'Intern Thuis',
+            TR: 'Training',
+            VAK: 'Vakantie',
+            TVT: 'Tijd voor tijd',
+            BV: 'Bijzonder Verlof',
+            OV: 'Ouderschapsverlof',
+            FD: 'Feestdag',
+            GA: 'Garage',
+            ZV: 'Zorgverlof',
+            ZK: 'Ziek',
+            DK: 'Dokter',
+        };
+
+        const IMPRODUCTIVE_CODES = ['IA', 'ITH', 'TR'];
+        const VERLOF_CODES = ['VAK', 'TVT', 'BV', 'OV', 'FD', 'GA', 'ZV'];
+        const ZIEK_CODES = ['ZK', 'DK'];
+
+        function buildCategoryBreakdown (codes, hoursByCode)
+        {
+            const parts = [];
+            for (const code of codes)
+            {
+                const h = hoursByCode[code] || 0;
+                if (h > 0.001)
+                {
+                    const label = CODE_LABELS[code] || code;
+                    parts.push('<span title="' + escapeHtml(label) + '">' + escapeHtml(code) + '</span> ' + escapeHtml(hoursToHHMM(h)));
+                }
+            }
+            return parts.length > 0 ? ' <span class="ratio-breakdown">(' + parts.join(', ') + ')</span>' : '';
+        }
+
+        function openRatioModal (btn)
+        {
+            if (!ratioDetailModal || !ratioDetailModalContent) return;
+
+            let payload = {};
+            try { payload = JSON.parse(btn.dataset.ratio || '{}'); } catch (e) { payload = {}; }
+
+            const totalHours = payload.totalHours || 0;
+            const directHours = payload.directHours || 0;
+            const improductiveHours = payload.improductiveHours || 0;
+            const verlofHours = payload.verlofHours || 0;
+            const ziekHours = payload.ziekHours || 0;
+            const hoursByCode = payload.hoursByCode || {};
+
+            const rows = [];
+
+            rows.push('<tr><th>Totaal</th><td><strong>' + escapeHtml(hoursToHHMM(totalHours)) + '</strong></td></tr>');
+
+            rows.push('<tr><th>Productief</th><td><strong>' + escapeHtml(hoursToHHMM(directHours)) + '</strong></td></tr>');
+
+            if (improductiveHours > 0.001)
+            {
+                rows.push('<tr><th>Improductief</th><td><strong>' + escapeHtml(hoursToHHMM(improductiveHours)) + '</strong>'
+                    + buildCategoryBreakdown(IMPRODUCTIVE_CODES, hoursByCode) + '</td></tr>');
+            }
+
+            if (verlofHours > 0.001)
+            {
+                rows.push('<tr><th>Verlof</th><td><strong>' + escapeHtml(hoursToHHMM(verlofHours)) + '</strong>'
+                    + buildCategoryBreakdown(VERLOF_CODES, hoursByCode) + '</td></tr>');
+            }
+
+            if (ziekHours > 0.001)
+            {
+                rows.push('<tr><th>Ziek</th><td><strong>' + escapeHtml(hoursToHHMM(ziekHours)) + '</strong>'
+                    + buildCategoryBreakdown(ZIEK_CODES, hoursByCode) + '</td></tr>');
+            }
+
+            ratioDetailModalContent.innerHTML = '<table class="bc-modal-table"><tbody>' + rows.join('') + '</tbody></table>';
+            ratioDetailModal.hidden = false;
+        }
+
+        function closeRatioModal ()
+        {
+            if (!ratioDetailModal) return;
+            ratioDetailModal.hidden = true;
         }
 
         function openMissingBcModal (btn)
@@ -2249,6 +2445,7 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
         if (openConfigBtn) openConfigBtn.addEventListener('click', openConfigModal);
         if (closeConfigBtn) closeConfigBtn.addEventListener('click', closeConfigModal);
         if (closeMissingBcBtn) closeMissingBcBtn.addEventListener('click', closeMissingBcModal);
+        if (closeRatioDetailBtn) closeRatioDetailBtn.addEventListener('click', closeRatioModal);
         if (configModal)
         {
             configModal.addEventListener('click', function (event)
@@ -2269,6 +2466,16 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                 }
             });
         }
+        if (ratioDetailModal)
+        {
+            ratioDetailModal.addEventListener('click', function (event)
+            {
+                if (event.target === ratioDetailModal)
+                {
+                    closeRatioModal();
+                }
+            });
+        }
 
         document.addEventListener('keydown', function (event)
         {
@@ -2279,6 +2486,10 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             if (event.key === 'Escape' && missingBcModal && !missingBcModal.hidden)
             {
                 closeMissingBcModal();
+            }
+            if (event.key === 'Escape' && ratioDetailModal && !ratioDetailModal.hidden)
+            {
+                closeRatioModal();
             }
         });
 
