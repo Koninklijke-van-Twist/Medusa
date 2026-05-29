@@ -205,6 +205,19 @@ function gk_hhmm(float $hours): string
     return minutes_to_hhmm((int) round($hours * 60));
 }
 
+function gk_productive_ratio_percent(array $resourceData): ?float
+{
+    $directHours = (float) ($resourceData['directHours'] ?? 0);
+    $improductiveHours = (float) ($resourceData['improductiveHours'] ?? 0);
+    $baseHours = $directHours + $improductiveHours;
+    if ($baseHours <= 0) {
+        return null;
+    }
+
+    $ratio = (1 - ($improductiveHours / $baseHours)) * 100;
+    return max(0.0, min(100.0, $ratio));
+}
+
 function gk_status_class(string $status): string
 {
     return match ($status) {
@@ -392,7 +405,7 @@ $recentTsDebugUrl = $base !== ''
     . "&\$filter=" . rawurlencode($recentFilterDecoded) . "&\$format=json"
     : '';
 if ($base !== '') {
-    $allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID,LVS_Termination_Date&\$format=json";
+    $allResourcesUrl = $base . "AppResource?\$select=No,Name,Time_Sheet_Approver_User_ID,Gen_Prod_Posting_Group,LVS_Termination_Date&\$format=json";
     try {
         $allResources = odata_get_all($allResourcesUrl, $auth, $day);
     } catch (Throwable $e) {
@@ -463,6 +476,7 @@ if ($selectedApproverUserId !== '') {
             $terminationDate = trim((string) ($r['LVS_Termination_Date'] ?? ''));
             $resourcesForApprover[$no] = [
                 'name' => (string) ($r['Name'] ?? $no),
+                'profitCenter' => trim((string) ($r['Gen_Prod_Posting_Group'] ?? '')),
                 'terminationDate' => $terminationDate,
                 'effectiveTerminationDate' => gk_normalize_termination_date($terminationDate),
                 'effectiveTerminationSource' => 'bc',
@@ -478,6 +492,7 @@ if ($selectedApproverUserId !== '') {
             $terminationDate = trim((string) ($r['LVS_Termination_Date'] ?? ''));
             $resourcesForApprover[$no] = [
                 'name' => (string) ($r['Name'] ?? $no),
+                'profitCenter' => trim((string) ($r['Gen_Prod_Posting_Group'] ?? '')),
                 'terminationDate' => $terminationDate,
                 'effectiveTerminationDate' => gk_normalize_termination_date($terminationDate),
                 'effectiveTerminationSource' => 'bc',
@@ -702,6 +717,7 @@ foreach ($weekStarts as $ws) {
     foreach ($resourcesForApprover as $rno => $resourceInfo) {
         $byWeek[$ws][$rno] = [
             'name' => (string) ($resourceInfo['name'] ?? $rno),
+            'profitCenter' => (string) ($resourceInfo['profitCenter'] ?? ''),
             'terminationDate' => (string) ($resourceInfo['terminationDate'] ?? ''),
             'effectiveTerminationDate' => (string) ($resourceInfo['effectiveTerminationDate'] ?? ''),
             'effectiveTerminationSource' => (string) ($resourceInfo['effectiveTerminationSource'] ?? 'bc'),
@@ -1316,6 +1332,22 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
             font-weight: 700;
         }
 
+        .week-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .week-profit-center-summary {
+            margin: 0;
+            font-size: 12px;
+            font-weight: 600;
+            color: #0f172a;
+            text-align: right;
+            white-space: nowrap;
+        }
+
         .week-dates {
             font-size: 12px;
             color: #64748b;
@@ -1760,10 +1792,56 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
                         $isPastWeek = ($weekEnd < $today);
                         $isCurrentWeek = ($weekStart <= $today && $weekEnd >= $today);
+
+                        $profitCenterSums = [];
+                        $profitCenterCounts = [];
+                        foreach ($resources as $rdata) {
+                            $isMissingRowForSummary = gk_is_missing_row($rdata, $isPastWeek, $isCurrentWeek);
+                            if ($rdata['isVakantie'] || $isMissingRowForSummary || !$rdata['present']) {
+                                continue;
+                            }
+
+                            $ratioPercent = gk_productive_ratio_percent($rdata);
+                            if ($ratioPercent === null) {
+                                continue;
+                            }
+
+                            $profitCenter = trim((string) ($rdata['profitCenter'] ?? ''));
+                            if ($profitCenter === '') {
+                                $profitCenter = '-';
+                            }
+                            $profitCenterSums[$profitCenter] = ($profitCenterSums[$profitCenter] ?? 0.0) + $ratioPercent;
+                            $profitCenterCounts[$profitCenter] = ($profitCenterCounts[$profitCenter] ?? 0) + 1;
+                        }
+
+                        $profitCenterSummaryParts = [];
+                        if (!empty($profitCenterSums)) {
+                            $profitCenterKeys = array_keys($profitCenterSums);
+                            natcasesort($profitCenterKeys);
+                            foreach ($profitCenterKeys as $profitCenter) {
+                                $count = (int) ($profitCenterCounts[$profitCenter] ?? 0);
+                                if ($count <= 0) {
+                                    continue;
+                                }
+                                $avgPercent = $profitCenterSums[$profitCenter] / $count;
+                                $profitCenterLabel = $profitCenter;
+                                if ($profitCenter !== '-') {
+                                    $profitCenterLower = strtolower($profitCenter);
+                                    $profitCenterLabel = strtoupper(substr($profitCenterLower, 0, 1)) . substr($profitCenterLower, 1);
+                                }
+                                $profitCenterSummaryParts[] = $profitCenterLabel . ': ' . number_format($avgPercent, 0, ',', '.') . '%';
+                            }
+                        }
+                        $profitCenterSummaryText = implode(', ', $profitCenterSummaryParts);
                         ?>
                         <div class="week-card">
-                            <div class="week-title">Week <?= htmlspecialchars($weekNo) ?> &ndash;
-                                <?= htmlspecialchars($weekYr) ?>
+                            <div class="week-head">
+                                <div class="week-title">Week <?= htmlspecialchars($weekNo) ?> &ndash;
+                                    <?= htmlspecialchars($weekYr) ?>
+                                </div>
+                                <?php if ($profitCenterSummaryText !== ''): ?>
+                                    <p class="week-profit-center-summary"><?= htmlspecialchars($profitCenterSummaryText) ?></p>
+                                <?php endif; ?>
                             </div>
                             <div class="week-dates">
                                 <?= gk_formatDate($weekStart) ?> t/m <?= gk_formatDate($weekEnd) ?>
@@ -1990,13 +2068,10 @@ $DAY_NAMES = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
                                                     <?php
                                                     $directHours = (float) ($rdata['directHours'] ?? 0);
                                                     $improductiveHours = (float) ($rdata['improductiveHours'] ?? 0);
+                                                    $ratioPercent = gk_productive_ratio_percent($rdata);
                                                     $ratioText = 'n.v.t.';
-                                                    $ratioPercent = null;
-                                                    $ratioBaseHours = $directHours + $improductiveHours;
-                                                    if ($ratioBaseHours > 0) {
-                                                        $ratio = (1 - ($improductiveHours / $ratioBaseHours)) * 100;
-                                                        $ratioPercent = max(0.0, min(100.0, $ratio));
-                                                        $ratioText = number_format($ratio, 0, ',', '.') . '%';
+                                                    if ($ratioPercent !== null) {
+                                                        $ratioText = number_format($ratioPercent, 0, ',', '.') . '%';
                                                     }
                                                     $ratioDataJson = json_encode([
                                                         'totalHours' => round((float) ($rdata['totalHours'] ?? 0), 4),
