@@ -92,6 +92,7 @@ if (str_contains($uri, '/mimir/api/query.php')) {
         'select' => $body['select'] ?? [],
         'filter' => (string) ($body['filter'] ?? ''),
         'max_age' => $body['max_age'] ?? null,
+        'top' => $body['top'] ?? null,
     ]]]);
     exit;
 }
@@ -211,6 +212,22 @@ test_assert(
     json_encode($parsedCompanies)
 );
 test_assert('companies-URL is geen entity', odata_mimir_parse_entity_url($companiesUrl) === null);
+
+$doubledApostrophe = "/Production/ODataV4/Company('Van Twist''s')/Urenstaten";
+$parsedDoubled = odata_mimir_parse_entity_url($doubledApostrophe);
+test_assert(
+    'company-key met verdubbelde apostrof',
+    is_array($parsedDoubled) && ($parsedDoubled['company'] ?? '') === "Van Twist's" && ($parsedDoubled['entity'] ?? '') === 'Urenstaten',
+    json_encode($parsedDoubled, JSON_UNESCAPED_UNICODE)
+);
+
+$percentEncoded = '/Production/ODataV4/Company(%27Koninklijke%20van%20Twist%27)/AppResource';
+$parsedPercent = odata_mimir_parse_entity_url($percentEncoded);
+test_assert(
+    'percent-encoded company-key met spatie',
+    is_array($parsedPercent) && ($parsedPercent['company'] ?? '') === 'Koninklijke van Twist' && ($parsedPercent['entity'] ?? '') === 'AppResource',
+    json_encode($parsedPercent, JSON_UNESCAPED_UNICODE)
+);
 
 $threw = false;
 try {
@@ -354,6 +371,29 @@ try {
     );
     test_assert('Mímir slaat Medusa-filecache over', test_cache_files() === $cacheBefore);
 
+    $freshRows = odata_get_all($apostropheUrl, [], 0);
+    test_assert(
+        'TTL 0 blijft max_age 0',
+        is_array($freshRows[0] ?? null) && ($freshRows[0]['max_age'] ?? null) === 0,
+        json_encode($freshRows, JSON_UNESCAPED_UNICODE)
+    );
+
+    $topUrl = $apostropheBase . 'Urenstaten?$select=No&$top=10';
+    $topRows = odata_get_all($topUrl, [], 30);
+    test_assert(
+        '$top gaat mee naar Mímir',
+        is_array($topRows[0] ?? null) && ($topRows[0]['top'] ?? null) === 10 && ($topRows[0]['select'] ?? []) === ['No'],
+        json_encode($topRows, JSON_UNESCAPED_UNICODE)
+    );
+
+    $orderByThrew = false;
+    try {
+        odata_get_all($apostropheBase . 'Urenstaten?$orderby=No', [], 30);
+    } catch (Exception $error) {
+        $orderByThrew = str_contains($error->getMessage(), '$orderby');
+    }
+    test_assert('$orderby wordt niet stil genegeerd', $orderByThrew);
+
     $companyRows = odata_get_all('https://bc.example/Sandbox/ODataV4/Company?$select=Name', [], 30);
     $companyNames = array_map(static function (array $row): string {
         return (string) ($row['Name'] ?? '');
@@ -428,6 +468,13 @@ try {
     if ($authExistedBefore && !is_string($authBackup)) {
         throw new RuntimeException('Bestaande auth.php kon niet worden gelezen; test wijzigt het bestand niet.');
     }
+    register_shutdown_function(static function () use ($authPath, $authExistedBefore, &$authWritten, $authBackup): void {
+        if (!$authWritten) {
+            return;
+        }
+        test_restore_auth_php($authPath, $authExistedBefore, $authBackup, true);
+        $authWritten = false;
+    });
     $authWritten = true;
     file_put_contents($authPath, "<?php\n\$baseUrl = " . var_export($baseUrl, true) . ";\n\$environment = 'Production';\n\$auth_list = " . var_export($auth_list, true) . ";\n\$mimirApi = '';\n");
     test_reset_discovery_cache();
@@ -461,6 +508,7 @@ try {
         proc_close($server);
     }
     test_restore_auth_php($authPath, $authExistedBefore, $authBackup, $authWritten);
+    $authWritten = false;
     foreach (array_diff(test_cache_files(), $cacheBefore) as $createdCache) {
         @unlink($createdCache);
     }

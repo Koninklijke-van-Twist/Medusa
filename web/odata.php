@@ -102,11 +102,12 @@ function odata_mimir_parse_entity_url(string $url): ?array
         return null;
     }
     $path = (string) $parts['path'];
-    // .../ODataV4/Company('Name')/EntitySet  or urlencoded company
-    if (preg_match("#/ODataV4/Company\\((?:'([^']*)'|%27([^%]+)%27)\\)/([^/?]+)#i", $path, $match) !== 1) {
+    // .../ODataV4/Company('Name')/EntitySet, doubled apostrophes, or %27...%27
+    if (preg_match("#/ODataV4/Company\\((?:'((?:[^']|'')*)'|%27(.*?)%27)\\)/([^/?]+)#i", $path, $match) !== 1) {
         return null;
     }
-    $company = rawurldecode($match[1] !== '' ? $match[1] : $match[2]);
+    $encodedCompany = ($match[1] ?? '') !== '' ? $match[1] : (string) ($match[2] ?? '');
+    $company = rawurldecode($encodedCompany);
     $company = str_replace("''", "'", $company);
     $entity = rawurldecode($match[3]);
     $query = [];
@@ -220,18 +221,43 @@ function odata_mimir_company_environment_map(?string $environment = null): array
 
 /**
  * Directe company/table-query via Mímir — geen BC-URL nodig.
- * $odataQuery gebruikt Medusa-keys zoals $select / $filter.
+ * $select en $filter gaan mee. $top gaat mee; zonder $top is top 0 (ongelimiteerd).
+ * OData $top=0 betekent een lege set, niet Mímirs "ongelimiteerd".
+ * $orderby, $skip en $expand ondersteunt de query-API niet; die geven een fout
+ * in plaats van stil te vervallen. $format wordt genegeerd (Mímir antwoordt JSON).
  *
  * @param array<string, mixed> $odataQuery
  * @return list<array<string, mixed>>
  */
 function odata_mimir_query(string $company, string $table, array $odataQuery, int $ttlSeconds): array
 {
+    foreach (['$orderby', '$skip', '$expand'] as $unsupported) {
+        if (trim((string) ($odataQuery[$unsupported] ?? '')) !== '') {
+            throw new Exception('Mímir vertaalt ' . $unsupported . ' niet. Alleen $select, $filter en $top gaan mee.');
+        }
+    }
+
+    $top = 0;
+    if (array_key_exists('$top', $odataQuery) && trim((string) $odataQuery['$top']) !== '') {
+        $topRaw = trim((string) $odataQuery['$top']);
+        if (preg_match('/^\d+$/', $topRaw) !== 1) {
+            throw new Exception('Mímir: ongeldige $top.');
+        }
+        $top = (int) $topRaw;
+        if ($top > 10000) {
+            throw new Exception('Mímir: $top groter dan 10000 wordt niet ondersteund.');
+        }
+    }
+
+    if ($top === 0 && array_key_exists('$top', $odataQuery) && trim((string) $odataQuery['$top']) !== '') {
+        return [];
+    }
+
     $body = [
         'company' => $company,
         'table' => $table,
         'max_age' => max(0, $ttlSeconds),
-        'top' => 0,
+        'top' => $top,
     ];
 
     $select = trim((string) ($odataQuery['$select'] ?? $odataQuery['select'] ?? ''));
@@ -285,8 +311,8 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
     $ttlSeconds = max(0, (int) $ttlSeconds);
 
     if (odata_mimir_api_key() !== '') {
-        // Mímir beheert de BC-cache (max_age); Medusa-filecache wordt overgeslagen.
-        return odata_mimir_fetch_all($url, $ttlSeconds === 0 ? 3600 : $ttlSeconds);
+        // Mímir beheert de BC-cache (max_age). 0 blijft 0: verse data, geen uur cache.
+        return odata_mimir_fetch_all($url, $ttlSeconds);
     }
 
     $ttlSeconds = max(1, $ttlSeconds);
