@@ -8,7 +8,7 @@ error_reporting(E_ALL);
  * (via odata_get_all) naar Mímir i.p.v. BC.
  *
  * Met $mimirApi gezet zijn $auth_list / $environment / $baseUrl / $auth ongebruikt voor BC;
- * Mímir beheert environments — Ploutos heeft alleen de API-key (+ optioneel $mimirBase) nodig.
+ * Mímir beheert environments — Medusa heeft alleen de API-key (+ optioneel $mimirBase) nodig.
  *
  * Tim moet in web/auth.php zetten (niet in git):
  *   $mimirApi  = 'mimir_…';              // verplicht om Mímir te activeren
@@ -60,7 +60,7 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
         CURLOPT_TIMEOUT => 600,
         CURLOPT_CUSTOMREQUEST => strtoupper($method),
         CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_USERAGENT => 'Ploutos-MimirClient/1.0',
+        CURLOPT_USERAGENT => 'Medusa-MimirClient/1.0',
     ];
     if ($jsonBody !== null) {
         $payload = json_encode($jsonBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -220,7 +220,7 @@ function odata_mimir_company_environment_map(?string $environment = null): array
 
 /**
  * Directe company/table-query via Mímir — geen BC-URL nodig.
- * $odataQuery gebruikt Ploutos-keys zoals $select / $filter.
+ * $odataQuery gebruikt Medusa-keys zoals $select / $filter.
  *
  * @param array<string, mixed> $odataQuery
  * @return list<array<string, mixed>>
@@ -285,7 +285,7 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
     $ttlSeconds = max(0, (int) $ttlSeconds);
 
     if (odata_mimir_api_key() !== '') {
-        // Mímir beheert de BC-cache (max_age); Ploutos-filecache wordt overgeslagen.
+        // Mímir beheert de BC-cache (max_age); Medusa-filecache wordt overgeslagen.
         return odata_mimir_fetch_all($url, $ttlSeconds === 0 ? 3600 : $ttlSeconds);
     }
 

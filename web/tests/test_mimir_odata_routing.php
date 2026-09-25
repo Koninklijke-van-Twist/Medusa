@@ -352,7 +352,7 @@ try {
             && ($rows[0]['select'] ?? []) === ['No', 'Resource_No'],
         json_encode($rows, JSON_UNESCAPED_UNICODE)
     );
-    test_assert('Mímir slaat Ploutos-filecache over', test_cache_files() === $cacheBefore);
+    test_assert('Mímir slaat Medusa-filecache over', test_cache_files() === $cacheBefore);
 
     $companyRows = odata_get_all('https://bc.example/Sandbox/ODataV4/Company?$select=Name', [], 30);
     $companyNames = array_map(static function (array $row): string {
@@ -392,7 +392,7 @@ try {
         if (str_contains($uri, '/stolen')) {
             $followedRedirect = true;
         }
-        if (($request['ua'] ?? '') === 'Ploutos-MimirClient/1.0' && str_contains($uri, '/mimir/api/')) {
+        if (($request['ua'] ?? '') === 'Medusa-MimirClient/1.0' && str_contains($uri, '/mimir/api/')) {
             $sawMimirUa = true;
         }
         if (($request['api_key'] ?? '') === 'mimir_test_key') {
