@@ -418,6 +418,7 @@ try {
         $redirectThrew = str_contains($error->getMessage(), 'HTTP 302');
     }
     test_assert('Mímir-request volgt geen redirect', $redirectThrew);
+    odata_mimir_circuit_reset();
 
     $requests = test_mock_requests();
     $hitBcHost = false;
