@@ -111,8 +111,8 @@ $expectedEntityUrl = "https://bc.example:7148/Production/ODataV4/Company('Konink
 if (!is_array($entityCall) || $entityCall['url'] !== $expectedEntityUrl || $entityCall['user'] !== 'bcuser' || $entityCall['ttl'] !== 120) {
     fail('entity-fallback URL/auth/ttl klopt niet: ' . json_encode($entityCall));
 }
-if (fallback_count() < 2) {
-    fail('elke fallback moet gelogd worden, log=' . fallback_log());
+if (fallback_count() !== 1) {
+    fail('alleen de eerste Mímir-fout mag gelogd worden, log=' . fallback_log());
 }
 $log = fallback_log();
 if (strpos($log, 'mimir_test_key_should_not_leak') !== false || strpos($log, 'bc-secret') !== false) {
@@ -182,6 +182,75 @@ if (($map['Hunter van Twist'] ?? '') !== 'Production' || ($map['KVT Gas'] ?? '')
     fail('environment-map viel niet terug op BC: ' . json_encode($map));
 }
 
+$auth_list['Sandbox'] = ['mode' => 'basic', 'user' => 'sandbox-user', 'pass' => 'sandbox-secret'];
+$GLOBALS['demeter_company_environment_map'] = [
+    'KVT Gas' => 'Production',
+    'Sandbox BV' => 'Sandbox',
+];
+odata_mimir_circuit_reset();
+$loggedBeforeSecondEnv = fallback_count();
+$beforeSecondEnv = count($calls);
+$secondEnvRows = odata_mimir_query('Sandbox BV', 'AppResource', ['$select' => 'No'], 30);
+if (($secondEnvRows[0]['No'] ?? '') !== 'WO-1') {
+    fail('tweede environment gaf geen BC-rijen');
+}
+$secondEnvCall = $calls[$beforeSecondEnv] ?? null;
+$expectedSecondUrl = "https://bc.example:7148/Sandbox/ODataV4/Company('Sandbox%20BV')/AppResource?";
+if (!is_array($secondEnvCall) || strpos((string) ($secondEnvCall['url'] ?? ''), $expectedSecondUrl) !== 0 || ($secondEnvCall['user'] ?? '') !== 'sandbox-user') {
+    fail('query gebruikte niet het environment van het bedrijf: ' . json_encode($secondEnvCall));
+}
+if (fallback_count() !== $loggedBeforeSecondEnv + 1) {
+    fail('tweede environment mag maar één keer loggen, log=' . fallback_log());
+}
+odata_mimir_query('Sandbox BV', 'AppResource', ['$select' => 'No'], 30);
+if (fallback_count() !== $loggedBeforeSecondEnv + 1) {
+    fail('open circuit mag niet opnieuw loggen, log=' . fallback_log());
+}
+if (strpos(fallback_log(), 'sandbox-secret') !== false) {
+    fail('log bevat een geheim');
+}
+odata_mimir_circuit_reset();
+$mimirSegmentRows = odata_get_all(
+    "https://mimir.invalid/mimir/ODataV4/Company('Sandbox%20BV')/AppResource?\$select=No",
+    $auth,
+    30
+);
+if (($mimirSegmentRows[0]['No'] ?? '') !== 'WO-1') {
+    fail('mimir-segment URL viel niet terug');
+}
+$mimirSegmentCall = $calls[count($calls) - 1] ?? null;
+if (!is_array($mimirSegmentCall) || strpos((string) ($mimirSegmentCall['url'] ?? ''), "https://bc.example:7148/Sandbox/ODataV4/Company('Sandbox%20BV')/AppResource?") !== 0 || ($mimirSegmentCall['user'] ?? '') !== 'sandbox-user') {
+    fail('mimir-segment werd niet naar het bedrijfs-environment herschreven: ' . json_encode($mimirSegmentCall));
+}
+$encodedEnvUrl = odata_bc_url_from_odata_url("https://mimir.invalid/My%20Env/ODataV4/Company('X')/AppResource");
+if ($encodedEnvUrl !== "https://bc.example:7148/My%20Env/ODataV4/Company('X')/AppResource") {
+    fail('environment-segment werd dubbel gecodeerd: ' . $encodedEnvUrl);
+}
+
+$environment = 'mimir';
+$cacheKey = build_cache_key("https://bc.example:7148/Sandbox/ODataV4/Company('Sandbox%20BV')/AppResource", ['user' => 'sandbox-user']);
+$cacheEnv = substr(strrchr($cacheKey, '|'), 1);
+if ($cacheEnv !== 'Sandbox') {
+    fail('cache-key moet het echte BC-environment gebruiken, kreeg: ' . $cacheKey);
+}
+$environment = 'Production';
+
+odata_mimir_circuit_reset();
+$callsBeforeLocal = count($calls);
+$loggedBeforeLocal = fallback_count();
+$localThrew = false;
+try {
+    odata_get_all('https://mimir.invalid/not-odata', $auth, 30);
+} catch (Throwable $localError) {
+    $localThrew = strpos($localError->getMessage(), 'kon niet worden vertaald') !== false;
+}
+if (!$localThrew) {
+    fail('een lokale vertaalfout moet blijven bestaan');
+}
+if (odata_mimir_circuit_open() || count($calls) !== $callsBeforeLocal || fallback_count() !== $loggedBeforeLocal) {
+    fail('een lokale vertaalfout mag het circuit niet openen');
+}
+
 $loggedBeforeRethrow = fallback_count();
 $callsBeforeRethrow = count($calls);
 odata_mimir_circuit_reset();
@@ -232,6 +301,49 @@ if (fallback_count() !== $loggedBeforeDirect) {
 $directCall = $calls[count($calls) - 1] ?? null;
 if (($directRows[0]['No'] ?? '') !== 'WO-1' || !is_array($directCall) || $directCall['url'] !== $directOnlyUrl) {
     fail('lege $mimirApi moet de oude directe route ongewijzigd gebruiken: ' . json_encode($directCall));
+}
+
+$savedGlobals = [];
+foreach (['baseUrl', 'auth', 'auth_list', 'environment', 'base', 'MEDUSA_AUTH_PHP_PATH', 'MEDUSA_AUTH_PHP_VARS'] as $globalName) {
+    $savedGlobals[$globalName] = array_key_exists($globalName, $GLOBALS) ? $GLOBALS[$globalName] : null;
+    $savedGlobals[$globalName . '_set'] = array_key_exists($globalName, $GLOBALS);
+    unset($GLOBALS[$globalName]);
+}
+$authFile = sys_get_temp_dir() . '/medusa-auth-lazy.php';
+file_put_contents($authFile, "<?php\n\$baseUrl = 'https://from-file.example:7148/';\n\$environment = 'FromFile';\n\$auth_list = ['FromFile' => ['mode' => 'basic', 'user' => 'fileuser', 'pass' => 'file-secret']];\n\$auth = \$auth_list['FromFile'];\n\$base = 'https://from-file.example:7148/base';\n");
+$GLOBALS['MEDUSA_AUTH_PHP_PATH'] = $authFile;
+odata_bc_ensure_auth_loaded();
+if (($GLOBALS['baseUrl'] ?? '') !== 'https://from-file.example:7148/'
+    || ($GLOBALS['environment'] ?? '') !== 'FromFile'
+    || ($GLOBALS['auth']['user'] ?? '') !== 'fileuser'
+    || ($GLOBALS['auth_list']['FromFile']['user'] ?? '') !== 'fileuser'
+    || ($GLOBALS['base'] ?? '') !== 'https://from-file.example:7148/base') {
+    fail('auth.php-variabelen zijn niet naar $GLOBALS gekopieerd: ' . json_encode([
+        'baseUrl' => $GLOBALS['baseUrl'] ?? null,
+        'environment' => $GLOBALS['environment'] ?? null,
+        'auth' => $GLOBALS['auth'] ?? null,
+        'base' => $GLOBALS['base'] ?? null,
+    ]));
+}
+$GLOBALS['baseUrl'] = 'https://keep.example/';
+unset($GLOBALS['MEDUSA_AUTH_PHP_VARS']);
+odata_bc_ensure_auth_loaded();
+if (($GLOBALS['baseUrl'] ?? '') !== 'https://keep.example/') {
+    fail('een gezette baseUrl werd overschreven: ' . (string) ($GLOBALS['baseUrl'] ?? ''));
+}
+if (($GLOBALS['environment'] ?? '') !== 'FromFile' || ($GLOBALS['auth']['user'] ?? '') !== 'fileuser') {
+    fail('een tweede load maakte de andere globals leeg');
+}
+if (strpos(fallback_log(), 'file-secret') !== false) {
+    fail('log bevat een geheim uit auth.php');
+}
+@unlink($authFile);
+foreach (['baseUrl', 'auth', 'auth_list', 'environment', 'base', 'MEDUSA_AUTH_PHP_PATH', 'MEDUSA_AUTH_PHP_VARS'] as $globalName) {
+    if (!empty($savedGlobals[$globalName . '_set'])) {
+        $GLOBALS[$globalName] = $savedGlobals[$globalName];
+    } else {
+        unset($GLOBALS[$globalName]);
+    }
 }
 
 echo "OK\n";
