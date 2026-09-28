@@ -79,7 +79,8 @@ function auth_get_active_environments(): array
     }
 
     // Geen lokale BC-config: bij Mímir environments afleiden uit companies.php.
-    if (auth_mimir_enabled()) {
+    // Na een Mímir-storing in dit proces slaan we Mímir over; BC-config ontbreekt dan ook.
+    if (auth_mimir_enabled() && !(function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open())) {
         $cached = $GLOBALS['demeter_active_environments'] ?? null;
         if (is_array($cached) && $cached !== []) {
             return array_values(array_map('strval', $cached));
@@ -129,8 +130,11 @@ function auth_get_auth_for_environment(string $environment): array
     $environmentKey = trim($environment);
     $list = is_array($auth_list ?? null) ? $auth_list : [];
 
+    $mimirWithoutFallback = auth_mimir_enabled()
+        && !(function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open());
+
     if ($environmentKey === '') {
-        if (auth_mimir_enabled()) {
+        if ($mimirWithoutFallback) {
             return [];
         }
         throw new RuntimeException('Environment ontbreekt in auth-configuratie.');
@@ -139,7 +143,8 @@ function auth_get_auth_for_environment(string $environment): array
     $auth = $list[$environmentKey] ?? null;
     if (!is_array($auth)) {
         // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
-        if (auth_mimir_enabled()) {
+        // Zodra Mímir in dit proces is uitgevallen, geldt weer de directe BC-auth.
+        if ($mimirWithoutFallback) {
             return [];
         }
         throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
@@ -289,7 +294,8 @@ function auth_fetch_companies_for_environment_via_curl(string $url, array $auth)
 }
 
 /**
- * Company-discovery via Mímir companies.php (geen BC auth_list/baseUrl).
+ * Company-discovery via Mímir companies.php.
+ * Faalt Mímir, dan vult odata_mimir_companies_as_rows de lijst vanaf BC.
  */
 function auth_discover_companies_via_mimir(): array
 {
@@ -405,7 +411,8 @@ function auth_discover_companies_via_mimir(): array
  */
 function auth_discover_companies_across_active_environments(int $ttlSeconds = 300): array
 {
-    // Mímir: companies + environments uit Mímir API — geen $auth_list/$baseUrl nodig.
+    // Mímir eerst. Faalt companies.php, dan levert odata_mimir_companies_as_rows de
+    // pre-Mímir BC-companylijst ($baseUrl + $auth_list) en slaat dit proces Mímir over.
     if (auth_mimir_enabled()) {
         return auth_discover_companies_via_mimir();
     }
@@ -567,7 +574,15 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
 
     $companyName = trim((string) $company);
 
-    if (auth_mimir_enabled()) {
+    $circuitOpen = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
+    if (auth_mimir_enabled() && $circuitOpen && function_exists('odata_bc_credentials_configured') && !odata_bc_credentials_configured()) {
+        $previous = function_exists('odata_mimir_last_error') ? odata_mimir_last_error() : null;
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+    }
+
+    if (auth_mimir_enabled() && !$circuitOpen) {
         $targetEnvironment = '';
         if ($companyName !== '') {
             try {
@@ -634,10 +649,11 @@ function auth_build_company_base_url(string $company, string $environment): stri
     }
 
     $base = rtrim(trim((string) ($baseUrl ?? '')), '/');
-    if ($base === '' && !auth_mimir_enabled()) {
+    $circuitOpen = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
+    if ($base === '' && (!auth_mimir_enabled() || $circuitOpen)) {
         throw new RuntimeException('baseUrl ontbreekt in auth-configuratie.');
     }
 
-    // Lege $baseUrl is geldig in Mímir-modus; odata_get_all vertaalt het pad.
+    // Lege $baseUrl is geldig zolang Mímir in dit proces nog niet is uitgevallen.
     return $base . '/' . rawurlencode($environmentKey) . '/ODataV4/Company(\'' . rawurlencode($company) . '\')/';
 }
