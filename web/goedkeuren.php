@@ -317,7 +317,7 @@ function gk_fetch_future_timesheets_for_resources(
         }
 
         $filterDecoded = "Starting_Date ge {$fromDate} and Starting_Date le {$toDate} and ({$resourceFilter})";
-        $url = $base . "Urenstaten?\$select=No,Resource_No,Starting_Date,Ending_Date"
+        $url = $base . "Urenstaten?\$select=Resource_No,Starting_Date"
             . "&\$filter=" . rawurlencode($filterDecoded)
             . "&\$format=json";
 
@@ -401,7 +401,7 @@ $debugResourceCounts = [
 ];
 $recentFilterDecoded = "Ending_Date ge $recentActivityFrom and Starting_Date le $today";
 $recentTsDebugUrl = $base !== ''
-    ? $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No"
+    ? $base . "Urenstaten?\$select=No,Starting_Date,Resource_No"
     . "&\$filter=" . rawurlencode($recentFilterDecoded) . "&\$format=json"
     : '';
 if ($base !== '') {
@@ -747,7 +747,7 @@ if ($resourcesForApprover && $weekStarts) {
     // Haal alle urenstaten op die het datumbereik overlappen
     $filterDecoded = "Ending_Date ge $from and Starting_Date le $to";
     $tsUrl = $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No,Resource_Name,"
-        . "Quantity,Quantity_Open,Quantity_Submitted,Quantity_Approved,Quantity_Rejected,"
+        . "Quantity_Open,Quantity_Submitted,Quantity_Approved,Quantity_Rejected,"
         . "LVS_Approved_Exists,LVS_Open_Exists,LVS_Rejected_Exists"
         . "&\$filter=" . rawurlencode($filterDecoded) . "&\$format=json";
     $tsRows = odata_get_all($tsUrl, $auth, $day);
@@ -770,7 +770,7 @@ if ($resourcesForApprover && $weekStarts) {
             'Urenstaatregels',
             'Time_Sheet_No,Line_No,Status,Header_Resource_No,Work_Type_Code,'
             . 'Field1,Field2,Field3,Field4,Field5,Field6,Field7,Total_Quantity,'
-            . 'Description,Job_No,Job_Task_No,Type',
+            . 'Description,Job_No,Job_Task_No',
             'Time_Sheet_No',
             $tsNos,
             $auth,
@@ -803,7 +803,6 @@ if ($resourcesForApprover && $weekStarts) {
                     'Ending_Date' => (string) ($tsByNo[$tsNo]['Ending_Date'] ?? ''),
                     'Resource_No' => (string) ($tsByNo[$tsNo]['Resource_No'] ?? ''),
                     'Resource_Name' => (string) ($tsByNo[$tsNo]['Resource_Name'] ?? ''),
-                    'Quantity' => (string) ($tsByNo[$tsNo]['Quantity'] ?? ''),
                     'Quantity_Open' => (string) ($tsByNo[$tsNo]['Quantity_Open'] ?? ''),
                     'Quantity_Submitted' => (string) ($tsByNo[$tsNo]['Quantity_Submitted'] ?? ''),
                     'Quantity_Approved' => (string) ($tsByNo[$tsNo]['Quantity_Approved'] ?? ''),
@@ -881,7 +880,6 @@ if ($resourcesForApprover && $weekStarts) {
                 'Ending_Date' => (string) ($t['Ending_Date'] ?? ''),
                 'Resource_No' => (string) ($t['Resource_No'] ?? ''),
                 'Resource_Name' => (string) ($t['Resource_Name'] ?? ''),
-                'Quantity' => (string) ($t['Quantity'] ?? ''),
                 'Quantity_Open' => (string) ($t['Quantity_Open'] ?? ''),
                 'Quantity_Submitted' => (string) ($t['Quantity_Submitted'] ?? ''),
                 'Quantity_Approved' => (string) ($t['Quantity_Approved'] ?? ''),
