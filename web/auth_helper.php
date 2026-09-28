@@ -57,13 +57,16 @@ function auth_get_active_environments(): array
 {
     global $auth_list, $environment;
 
+    auth_ensure_odata_loaded();
     $configured = [];
     if (isset($environment)) {
         $configured = auth_normalize_environment_list($environment);
     }
 
     $known = is_array($auth_list ?? null) ? array_keys($auth_list) : [];
-    if ($configured !== []) {
+    $circuitOpen = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
+    // Tijdens de BC-fallback hoort een lege auth_list de primaire $environment te houden.
+    if ($configured !== [] && !($circuitOpen && $known === [])) {
         $knownMap = array_fill_keys($known, true);
         $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap): bool {
             return isset($knownMap[$item]);
@@ -130,8 +133,12 @@ function auth_get_auth_for_environment(string $environment): array
     $environmentKey = trim($environment);
     $list = is_array($auth_list ?? null) ? $auth_list : [];
 
-    $mimirWithoutFallback = auth_mimir_enabled()
-        && !(function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open());
+    auth_ensure_odata_loaded();
+    $circuitOpen = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
+    $mimirWithoutFallback = auth_mimir_enabled() && !$circuitOpen;
+    if (function_exists('odata_bc_preserve_configured_auth')) {
+        odata_bc_preserve_configured_auth();
+    }
 
     if ($environmentKey === '') {
         if ($mimirWithoutFallback) {
@@ -146,6 +153,12 @@ function auth_get_auth_for_environment(string $environment): array
         // Zodra Mímir in dit proces is uitgevallen, geldt weer de directe BC-auth.
         if ($mimirWithoutFallback) {
             return [];
+        }
+        if ($circuitOpen && function_exists('odata_bc_auth_for_direct_environment')) {
+            $direct = odata_bc_auth_for_direct_environment($environmentKey, []);
+            if (is_array($direct)) {
+                return $direct;
+            }
         }
         throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
     }
@@ -574,6 +587,14 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
 
     $companyName = trim((string) $company);
 
+    auth_ensure_odata_loaded();
+    if (function_exists('odata_bc_preserve_configured_auth')) {
+        odata_bc_preserve_configured_auth();
+    }
+    if (function_exists('odata_bc_preserve_primary_environment')) {
+        odata_bc_preserve_primary_environment();
+    }
+
     $circuitOpen = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
     if (auth_mimir_enabled() && $circuitOpen && function_exists('odata_bc_credentials_configured') && !odata_bc_credentials_configured()) {
         $previous = function_exists('odata_mimir_last_error') ? odata_mimir_last_error() : null;
@@ -595,6 +616,7 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
         }
 
         // BC-auth alleen als lokaal geconfigureerd; anders lege sentinel.
+        // De oorspronkelijke $auth blijft apart bewaard zodat de BC-fallback die nog kan gebruiken.
         $targetAuth = [];
         if ($targetEnvironment !== '') {
             global $auth_list;
