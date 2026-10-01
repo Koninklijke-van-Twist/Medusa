@@ -28,6 +28,7 @@ register_shutdown_function(function () {
 });
 
 require __DIR__ . "/odata.php";
+require_once __DIR__ . "/lib_goedkeuren.php";
 require __DIR__ . "/auth.php";
 require_once __DIR__ . "/auth_helper.php";
 require __DIR__ . "/lib_times.php";
@@ -124,56 +125,6 @@ $base = $selectedCompany !== '' && $selectedEnvironment !== ''
 // =========================================================
 // HELPERS
 // =========================================================
-function gk_odata_or_filter(string $field, array $values): string
-{
-    $parts = array_map(
-        fn($value) => $field . " eq '" . str_replace("'", "''", (string) $value) . "'",
-        $values
-    );
-
-    return rawurlencode(implode(' or ', $parts));
-}
-
-function gk_odata_fetch_by_or_filter(
-    string $base,
-    string $entity,
-    string $select,
-    string $field,
-    array $values,
-    array $auth,
-    int $ttl,
-    int $chunkSize = 60
-): array {
-    $values = array_values(array_unique(array_filter(array_map(
-        fn($value) => (string) $value,
-        $values
-    ), fn($value) => $value !== '')));
-
-    if (!$values) {
-        return [];
-    }
-
-    $rows = [];
-    foreach (array_chunk($values, $chunkSize) as $chunk) {
-        $filter = gk_odata_or_filter($field, $chunk);
-        if ($filter === '') {
-            continue;
-        }
-
-        $url = $base . $entity . "?\$select={$select}&\$filter={$filter}&\$format=json";
-        $chunkRows = odata_get_all($url, $auth, $ttl);
-        if (!$chunkRows) {
-            continue;
-        }
-
-        foreach ($chunkRows as $row) {
-            $rows[] = $row;
-        }
-    }
-
-    return $rows;
-}
-
 function gk_formatDate(string $ymd): string
 {
     if ($ymd === '') {
@@ -246,11 +197,6 @@ function gk_is_vakantie(string $resourceNo, string $weekStart): bool
     return is_file(__DIR__ . '/cache/vakantie/' . $key . '.json');
 }
 
-function gk_is_valid_ymd(string $value): bool
-{
-    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1;
-}
-
 function gk_is_missing_row(array $resourceData, bool $isPastWeek, bool $isCurrentWeek): bool
 {
     return !$resourceData['isVakantie']
@@ -272,66 +218,6 @@ function gk_week_is_after_termination(string $weekEnd, string $terminationDate):
     }
 
     return $weekEnd > $terminationDate;
-}
-
-function gk_normalize_termination_date(string $terminationDate): string
-{
-    if (!gk_is_valid_ymd($terminationDate)) {
-        return '';
-    }
-
-    if ($terminationDate === '0001-01-01') {
-        return '';
-    }
-
-    return $terminationDate;
-}
-
-function gk_fetch_future_timesheets_for_resources(
-    string $base,
-    array $auth,
-    int $ttl,
-    array $resourceNos,
-    string $fromDate,
-    string $toDate,
-    int $chunkSize = 50
-): array {
-    $resourceNos = array_values(array_unique(array_filter(array_map(
-        fn($resourceNo) => trim((string) $resourceNo),
-        $resourceNos
-    ), fn($resourceNo) => $resourceNo !== '')));
-
-    if ($base === '' || !$resourceNos || !gk_is_valid_ymd($fromDate) || !gk_is_valid_ymd($toDate)) {
-        return [];
-    }
-
-    $rows = [];
-    foreach (array_chunk($resourceNos, $chunkSize) as $chunk) {
-        $resourceFilter = implode(' or ', array_map(
-            fn($resourceNo) => "Resource_No eq '" . str_replace("'", "''", (string) $resourceNo) . "'",
-            $chunk
-        ));
-
-        if ($resourceFilter === '') {
-            continue;
-        }
-
-        $filterDecoded = "Starting_Date ge {$fromDate} and Starting_Date le {$toDate} and ({$resourceFilter})";
-        $url = $base . "Urenstaten?\$select=Resource_No,Starting_Date"
-            . "&\$filter=" . rawurlencode($filterDecoded)
-            . "&\$format=json";
-
-        $chunkRows = odata_get_all($url, $auth, $ttl);
-        if (!$chunkRows) {
-            continue;
-        }
-
-        foreach ($chunkRows as $row) {
-            $rows[] = $row;
-        }
-    }
-
-    return $rows;
 }
 
 function gk_has_no_timesheet_for_week(array $resourceData): bool
@@ -502,109 +388,84 @@ if ($selectedApproverUserId !== '') {
 }
 $debugResourceCounts['after_approver_filter'] = count($resourcesForApprover);
 
+$headerRows = [];
+$timesheetHeadersFetched = false;
 if ($resourcesForApprover) {
-    $recentTsUrl = $recentTsDebugUrl;
-    $recentTsRows = odata_get_all($recentTsUrl, $auth, $day);
+    $headerWindow = gk_timesheet_query_window($recentActivityFrom, $from, $today, $to);
+    $headerFilter = "Ending_Date ge {$headerWindow['from']} and Starting_Date le {$headerWindow['to']}";
+    $recentTsUrl = gk_odata_entity_url($base, 'Urenstaten', gk_timesheet_header_select(), $headerFilter);
+    $headerRows = odata_get_all($recentTsUrl, $auth, $day);
+    $timesheetHeadersFetched = true;
 
-    $recentTsByNo = [];
-    $recentTsNos = [];
-    foreach ($recentTsRows as $row) {
-        $tsNo = trim((string) ($row['No'] ?? ''));
-        if ($tsNo === '') {
-            continue;
+    $recentRows = [];
+    foreach ($headerRows as $row) {
+        if (is_array($row) && gk_timesheet_matches_window($row, $recentActivityFrom, $today)) {
+            $recentRows[] = $row;
         }
-        $recentTsByNo[$tsNo] = $row;
-        $recentTsNos[] = $tsNo;
     }
 
-    $recentResourceNos = [];
-    $recentLines = [];
-    if ($recentTsNos) {
-        $recentLines = gk_odata_fetch_by_or_filter(
+    $headersMissingResource = [];
+    foreach ($recentRows as $row) {
+        $tsNo = trim((string) ($row['No'] ?? ''));
+        $resourceNo = trim((string) ($row['Resource_No'] ?? ''));
+        if ($tsNo !== '' && $resourceNo === '') {
+            $headersMissingResource[$tsNo] = $row;
+        }
+    }
+    if ($headersMissingResource !== []) {
+        $recoveredLines = gk_odata_fetch_by_or_filter(
             $base,
             'Urenstaatregels',
             'Time_Sheet_No,Header_Resource_No',
             'Time_Sheet_No',
-            $recentTsNos,
+            array_keys($headersMissingResource),
             $auth,
             $day
         );
-
-        foreach ($recentLines as $line) {
-            $resourceNo = trim((string) ($line['Header_Resource_No'] ?? ''));
-            if ($resourceNo !== '' && isset($resourcesForApprover[$resourceNo])) {
-                $recentResourceNos[$resourceNo] = true;
+        $recoveredResourceByTs = [];
+        foreach ($recoveredLines as $line) {
+            if (!is_array($line)) {
+                continue;
             }
+            $tsNo = trim((string) ($line['Time_Sheet_No'] ?? ''));
+            $resourceNo = trim((string) ($line['Header_Resource_No'] ?? ''));
+            if ($tsNo === '' || $resourceNo === '' || !isset($headersMissingResource[$tsNo])) {
+                continue;
+            }
+            $recoveredResourceByTs[$tsNo] = $resourceNo;
+            $copy = $headersMissingResource[$tsNo];
+            $copy['Resource_No'] = $resourceNo;
+            $recentRows[] = $copy;
+        }
+        if ($recoveredResourceByTs !== []) {
+            foreach ($headerRows as &$headerRow) {
+                if (!is_array($headerRow)) {
+                    continue;
+                }
+                $tsNo = trim((string) ($headerRow['No'] ?? ''));
+                if ($tsNo === '' || !isset($recoveredResourceByTs[$tsNo])) {
+                    continue;
+                }
+                if (trim((string) ($headerRow['Resource_No'] ?? '')) === '') {
+                    $headerRow['Resource_No'] = $recoveredResourceByTs[$tsNo];
+                }
+            }
+            unset($headerRow);
         }
     }
 
-    foreach ($recentTsByNo as $row) {
-        $resourceNo = trim((string) ($row['Resource_No'] ?? ''));
-        if ($resourceNo !== '' && isset($resourcesForApprover[$resourceNo])) {
-            $recentResourceNos[$resourceNo] = true;
-        }
-    }
-
-    if ($recentResourceNos) {
-        $resourcesForApprover = array_intersect_key($resourcesForApprover, $recentResourceNos);
+    $activity = gk_recent_activity_from_headers($recentRows, $resourcesForApprover);
+    if ($activity['resourceNos'] !== []) {
+        $resourcesForApprover = array_intersect_key($resourcesForApprover, $activity['resourceNos']);
     } else {
         $resourcesForApprover = [];
     }
     $debugResourceCounts['after_recent_activity_filter'] = count($resourcesForApprover);
 
-    if ($autoFromMode && $resourcesForApprover) {
-        $weekStartsWithData = [];
-
-        foreach ($recentLines as $line) {
-            $lineTsNo = trim((string) ($line['Time_Sheet_No'] ?? ''));
-            if ($lineTsNo === '' || !isset($recentTsByNo[$lineTsNo])) {
-                continue;
-            }
-
-            $resourceNo = trim((string) ($line['Header_Resource_No'] ?? ''));
-            if ($resourceNo === '' || !isset($resourcesForApprover[$resourceNo])) {
-                continue;
-            }
-
-            $weekStartRaw = (string) ($recentTsByNo[$lineTsNo]['Starting_Date'] ?? '');
-            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $weekStartRaw)) {
-                continue;
-            }
-
-            try {
-                $weekStart = (new DateTimeImmutable($weekStartRaw))->modify('monday this week')->format('Y-m-d');
-            } catch (Exception $e) {
-                continue;
-            }
-
-            $weekStartsWithData[$weekStart] = true;
-        }
-
-        foreach ($recentTsByNo as $row) {
-            $resourceNo = trim((string) ($row['Resource_No'] ?? ''));
-            if ($resourceNo === '' || !isset($resourcesForApprover[$resourceNo])) {
-                continue;
-            }
-
-            $weekStartRaw = (string) ($row['Starting_Date'] ?? '');
-            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $weekStartRaw)) {
-                continue;
-            }
-
-            try {
-                $weekStart = (new DateTimeImmutable($weekStartRaw))->modify('monday this week')->format('Y-m-d');
-            } catch (Exception $e) {
-                continue;
-            }
-
-            $weekStartsWithData[$weekStart] = true;
-        }
-
-        if (!empty($weekStartsWithData)) {
-            $firstWeekStarts = array_keys($weekStartsWithData);
-            sort($firstWeekStarts);
-            $from = (string) ($firstWeekStarts[0] ?? $from);
-        }
+    if ($autoFromMode && $resourcesForApprover && $activity['weekStarts'] !== []) {
+        $firstWeekStarts = array_keys($activity['weekStarts']);
+        sort($firstWeekStarts);
+        $from = (string) ($firstWeekStarts[0] ?? $from);
     }
 }
 
@@ -618,6 +479,7 @@ $futureTimesheetDetectionDebug = [
 
 if ($detectMissingFutureTimesheets && $resourcesForApprover) {
     $selectedWeekStarts = week_starts_for_range($from, $to);
+    $futureFetchOk = false;
     $futureTsRows = [];
     try {
         $futureTsRows = gk_fetch_future_timesheets_for_resources(
@@ -628,65 +490,22 @@ if ($detectMissingFutureTimesheets && $resourcesForApprover) {
             (string) $futureTimesheetDetectionDebug['lookahead_from'],
             (string) $futureTimesheetDetectionDebug['lookahead_to']
         );
+        $futureFetchOk = true;
     } catch (Throwable $e) {
         $futureTsRows = [];
     }
 
-    $resourceHasFutureTimesheet = [];
-    $resourceHasTimesheetByWeek = [];
-    foreach ($futureTsRows as $futureTsRow) {
-        $resourceNo = trim((string) ($futureTsRow['Resource_No'] ?? ''));
-        if ($resourceNo !== '' && isset($resourcesForApprover[$resourceNo])) {
-            $resourceHasFutureTimesheet[$resourceNo] = true;
-
-            $startDate = (string) ($futureTsRow['Starting_Date'] ?? '');
-            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
-                try {
-                    $weekStart = (new DateTimeImmutable($startDate))->modify('monday this week')->format('Y-m-d');
-                    $resourceHasTimesheetByWeek[$resourceNo][$weekStart] = true;
-                } catch (Exception $e) {
-                    // Negeer onparsebare datums in diagnose-logica.
-                }
-            }
-        }
+    if ($futureFetchOk) {
+        $cutoff = gk_apply_future_timesheet_cutoffs(
+            $resourcesForApprover,
+            $futureTsRows,
+            $selectedWeekStarts,
+            (string) $futureTimesheetDetectionDebug['lookahead_from']
+        );
+        $resourcesForApprover = $cutoff['resources'];
+        $futureTimesheetDetectionDebug['resources_cutoff_detected'] = $cutoff['cutoff'];
+        $futureTimesheetDetectionDebug['resources_without_future_timesheets'] = $cutoff['without'];
     }
-
-    foreach ($resourcesForApprover as $resourceNo => &$resourceInfo) {
-        $effectiveTerminationDate = gk_normalize_termination_date((string) ($resourceInfo['terminationDate'] ?? ''));
-        if ($effectiveTerminationDate !== '') {
-            $resourceInfo['effectiveTerminationDate'] = $effectiveTerminationDate;
-            $resourceInfo['effectiveTerminationSource'] = 'bc';
-            continue;
-        }
-
-        $firstMissingAfterExistingWeek = null;
-        $seenExistingWeek = false;
-        foreach ($selectedWeekStarts as $weekStart) {
-            if (isset($resourceHasTimesheetByWeek[$resourceNo][$weekStart])) {
-                $seenExistingWeek = true;
-                continue;
-            }
-
-            if ($seenExistingWeek) {
-                $firstMissingAfterExistingWeek = $weekStart;
-                break;
-            }
-        }
-
-        if ($firstMissingAfterExistingWeek !== null) {
-            $resourceInfo['effectiveTerminationDate'] = $firstMissingAfterExistingWeek;
-            $resourceInfo['effectiveTerminationSource'] = 'missing-future-timesheets';
-            $futureTimesheetDetectionDebug['resources_cutoff_detected']++;
-            continue;
-        }
-
-        if (!isset($resourceHasFutureTimesheet[$resourceNo])) {
-            $resourceInfo['effectiveTerminationDate'] = (string) $futureTimesheetDetectionDebug['lookahead_from'];
-            $resourceInfo['effectiveTerminationSource'] = 'missing-future-timesheets';
-            $futureTimesheetDetectionDebug['resources_without_future_timesheets']++;
-        }
-    }
-    unset($resourceInfo);
 }
 
 if (empty($resourcesForApprover)) {
@@ -700,8 +519,22 @@ if (empty($resourcesForApprover)) {
         'fetch_error' => $allResourcesFetchError,
         'counts' => $debugResourceCounts,
         'future_timesheet_detection' => $futureTimesheetDetectionDebug,
-        'raw_response_app_resource' => $allResourcesUrl !== '' ? odata_debug_fetch_raw($allResourcesUrl, $auth) : null,
-        'raw_response_recent_urenstaten' => $recentTsDebugUrl !== '' ? odata_debug_fetch_raw($recentTsDebugUrl, $auth) : null,
+        'raw_response_app_resource' => $allResources !== []
+            ? [
+                'http_code' => 200,
+                'url' => $allResourcesUrl,
+                'row_count' => count($allResources),
+                'note' => 'Al opgehaald tijdens deze paginalading.',
+            ]
+            : ($allResourcesDebugPayload['raw_response'] ?? ($allResourcesUrl !== '' ? odata_debug_fetch_raw($allResourcesUrl, $auth) : null)),
+        'raw_response_recent_urenstaten' => $timesheetHeadersFetched
+            ? [
+                'http_code' => 200,
+                'url' => $recentTsUrl,
+                'row_count' => count($headerRows),
+                'note' => 'Al opgehaald tijdens deze paginalading.',
+            ]
+            : ($recentTsDebugUrl !== '' ? odata_debug_fetch_raw($recentTsDebugUrl, $auth) : null),
     ];
 }
 
@@ -744,27 +577,21 @@ foreach ($weekStarts as $ws) {
 // OPHALEN: URENSTATEN + REGELS
 // =========================================================
 if ($resourcesForApprover && $weekStarts) {
-    // Haal alle urenstaten op die het datumbereik overlappen
-    $filterDecoded = "Ending_Date ge $from and Starting_Date le $to";
-    $tsUrl = $base . "Urenstaten?\$select=No,Starting_Date,Ending_Date,Resource_No,Resource_Name,"
-        . "Quantity_Open,Quantity_Submitted,Quantity_Approved,Quantity_Rejected,"
-        . "LVS_Approved_Exists,LVS_Open_Exists,LVS_Rejected_Exists"
-        . "&\$filter=" . rawurlencode($filterDecoded) . "&\$format=json";
-    $tsRows = odata_get_all($tsUrl, $auth, $day);
-
     $tsByNo = [];
-    $tsNos = [];
-    foreach ($tsRows as $t) {
+    foreach ($headerRows as $t) {
+        if (!is_array($t) || !gk_timesheet_matches_window($t, $from, $to)) {
+            continue;
+        }
         $no = (string) ($t['No'] ?? '');
         if ($no === '') {
             continue;
         }
         $tsByNo[$no] = $t;
-        $tsNos[] = $no;
     }
 
-    // Haal regels op
-    if ($tsNos) {
+    $tsNos = gk_timesheet_numbers_for_lines($tsByNo, $resourcesForApprover);
+
+    if ($tsNos !== []) {
         $linesAll = gk_odata_fetch_by_or_filter(
             $base,
             'Urenstaatregels',

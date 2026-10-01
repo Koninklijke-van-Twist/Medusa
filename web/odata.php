@@ -97,8 +97,53 @@ function odata_mimir_timeout_seconds(): int
     return odata_mimir_timeout_seconds_for_sapi(PHP_SAPI);
 }
 
+function odata_bc_timeout_seconds_for_sapi(string $sapi): int
+{
+    return odata_mimir_timeout_seconds_for_sapi($sapi);
+}
+
+/**
+ * Normale BC-calls volgen de Mímir-timeout. Een heel lange URL (typisch een
+ * te grote OR-filter) krijgt op web een kort plafond, zodat één afwijzing niet
+ * tot max_execution_time (120s) blijft hangen.
+ */
+function odata_bc_timeout_for_url(string $url, ?string $sapi = null): int
+{
+    $sapi = $sapi ?? PHP_SAPI;
+    $timeout = odata_bc_timeout_seconds_for_sapi($sapi);
+    if (strlen($url) > 1800 && strtolower($sapi) !== 'cli') {
+        return min($timeout, 15);
+    }
+
+    return $timeout;
+}
+
 class OdataMimirFailure extends Exception
 {
+}
+
+/**
+ * Mímir/BC wees een filter af (HTTP 400). Geen storing: het circuit blijft dicht
+ * en dezelfde URL gaat niet naar de trage BC-fallback.
+ */
+class OdataFilterRejected extends Exception
+{
+    /** @var list<int> */
+    public array $failedIndexes = [];
+
+    /** @var array<int, list<array<string, mixed>>> */
+    public array $completed = [];
+
+    /**
+     * @param list<int> $failedIndexes
+     * @param array<int, list<array<string, mixed>>> $completed
+     */
+    public function __construct(string $message, array $failedIndexes = [], array $completed = [])
+    {
+        parent::__construct($message);
+        $this->failedIndexes = array_values($failedIndexes);
+        $this->completed = $completed;
+    }
 }
 
 function odata_mimir_fail(Exception $exception): void
@@ -671,19 +716,15 @@ function odata_bc_url_from_odata_url(string $url): string
     return $rebuilt;
 }
 
-function odata_mimir_request(string $method, string $path, ?array $jsonBody = null): array
+/**
+ * @param array<string, mixed>|null $jsonBody
+ * @return resource|\CurlHandle
+ */
+function odata_mimir_init_curl(string $method, string $path, ?array $jsonBody = null)
 {
     $apiKey = odata_mimir_api_key();
     if ($apiKey === '') {
         throw new Exception('Mímir API-sleutel ontbreekt ($mimirApi).');
-    }
-
-    if (odata_mimir_circuit_open()) {
-        $previous = odata_mimir_last_error();
-        if ($previous instanceof Throwable) {
-            throw $previous;
-        }
-        throw new Exception('Mímir overgeslagen na eerdere fout in dit verzoek.');
     }
 
     $url = odata_mimir_base_url() . '/' . ltrim($path, '/');
@@ -714,18 +755,26 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
         $opts[CURLOPT_POSTFIELDS] = $payload;
     }
     curl_setopt_array($ch, $opts);
-    $raw = curl_exec($ch);
-    if ($raw === false) {
-        $err = curl_error($ch);
-        curl_close($ch);
-        odata_mimir_fail(new Exception('Mímir cURL error: ' . $err));
-    }
-    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
 
-    $decoded = json_decode($raw, true);
+    return $ch;
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function odata_mimir_interpret($raw, int $code, string $curlError, bool $rejectFilterError = false): array
+{
+    if ($curlError !== '') {
+        odata_mimir_fail(new Exception('Mímir cURL error: ' . $curlError));
+    }
+
+    $rawText = is_string($raw) ? $raw : '';
+    $decoded = json_decode($rawText, true);
     if ($code < 200 || $code >= 300) {
-        $message = is_array($decoded) ? (string) ($decoded['error'] ?? $raw) : $raw;
+        $message = is_array($decoded) ? (string) ($decoded['error'] ?? $rawText) : $rawText;
+        if ($rejectFilterError && $code === 400) {
+            throw new OdataFilterRejected('Mímir HTTP 400: ' . $message);
+        }
         odata_mimir_fail(new Exception('Mímir HTTP ' . $code . ': ' . $message));
     }
     if (!is_array($decoded)) {
@@ -736,7 +785,27 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
         $message = is_string($errorField) ? $errorField : (string) json_encode($errorField, JSON_UNESCAPED_UNICODE);
         odata_mimir_fail(new Exception('Mímir error: ' . $message));
     }
+
     return $decoded;
+}
+
+function odata_mimir_request(string $method, string $path, ?array $jsonBody = null): array
+{
+    if (odata_mimir_circuit_open()) {
+        $previous = odata_mimir_last_error();
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+        throw new Exception('Mímir overgeslagen na eerdere fout in dit verzoek.');
+    }
+
+    $ch = odata_mimir_init_curl($method, $path, $jsonBody);
+    $raw = curl_exec($ch);
+    $curlError = $raw === false ? (string) curl_error($ch) : '';
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return odata_mimir_interpret($raw === false ? '' : $raw, $code, $curlError, false);
 }
 
 /**
@@ -965,16 +1034,10 @@ function odata_mimir_assert_supported_query(array $odataQuery): void
 }
 
 /**
- * Directe company/table-query via Mímir — geen BC-URL nodig.
- * $select en $filter gaan mee. $top gaat mee; zonder $top is top 0 (ongelimiteerd).
- * OData $top=0 betekent een lege set, niet Mímirs "ongelimiteerd".
- * $orderby, $skip en $expand ondersteunt de query-API niet; die geven een fout
- * in plaats van stil te vervallen. $format wordt genegeerd (Mímir antwoordt JSON).
- *
  * @param array<string, mixed> $odataQuery
- * @return list<array<string, mixed>>
+ * @return array{body: array<string, mixed>, empty: bool}
  */
-function odata_mimir_query_impl(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+function odata_mimir_query_body(string $company, string $table, array $odataQuery, int $ttlSeconds): array
 {
     foreach (['$orderby', '$skip', '$expand'] as $unsupported) {
         if (trim((string) ($odataQuery[$unsupported] ?? '')) !== '') {
@@ -995,7 +1058,7 @@ function odata_mimir_query_impl(string $company, string $table, array $odataQuer
     }
 
     if ($top === 0 && array_key_exists('$top', $odataQuery) && trim((string) $odataQuery['$top']) !== '') {
-        return [];
+        return ['body' => [], 'empty' => true];
     }
 
     $body = [
@@ -1024,7 +1087,27 @@ function odata_mimir_query_impl(string $company, string $table, array $odataQuer
         $body['filter'] = $filter;
     }
 
-    $response = odata_mimir_request('POST', 'query.php', $body);
+    return ['body' => $body, 'empty' => false];
+}
+
+/**
+ * Directe company/table-query via Mímir — geen BC-URL nodig.
+ * $select en $filter gaan mee. $top gaat mee; zonder $top is top 0 (ongelimiteerd).
+ * OData $top=0 betekent een lege set, niet Mímirs "ongelimiteerd".
+ * $orderby, $skip en $expand ondersteunt de query-API niet; die geven een fout
+ * in plaats van stil te vervallen. $format wordt genegeerd (Mímir antwoordt JSON).
+ *
+ * @param array<string, mixed> $odataQuery
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_query_impl(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+{
+    $built = odata_mimir_query_body($company, $table, $odataQuery, $ttlSeconds);
+    if ($built['empty']) {
+        return [];
+    }
+
+    $response = odata_mimir_request('POST', 'query.php', $built['body']);
     if (!isset($response['value']) || !is_array($response['value'])) {
         odata_mimir_fail(new Exception("Mímir query-antwoord mist 'value'."));
     }
@@ -1191,6 +1274,185 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
     return odata_get_all_direct($url, $auth, $ttlSeconds);
 }
 
+/**
+ * Zelfde rijen als odata_get_all, maar meerdere URLs tegelijk.
+ * HTTP 400 opent het circuit niet en valt niet terug op BC (diezelfde filter
+ * hangt daar). Een echte Mímir-storing valt wél terug, net als odata_get_all.
+ *
+ * @param list<string> $urls
+ * @return list<list<array<string, mixed>>>
+ */
+function odata_get_many(array $urls, array $auth, $ttlSeconds = 300, int $concurrency = 8): array
+{
+    $ttlSeconds = max(0, (int) $ttlSeconds);
+    $urls = array_values($urls);
+    if ($urls === []) {
+        return [];
+    }
+
+    $sequential = static function () use ($urls, $auth, $ttlSeconds): array {
+        $out = [];
+        foreach ($urls as $url) {
+            $out[] = odata_get_all($url, $auth, $ttlSeconds);
+        }
+        return $out;
+    };
+
+    if (!odata_mimir_enabled() || odata_mimir_circuit_open()) {
+        return $sequential();
+    }
+
+    $jobs = [];
+    foreach ($urls as $index => $url) {
+        $parsed = odata_mimir_parse_entity_url($url);
+        if (!is_array($parsed)) {
+            return $sequential();
+        }
+        try {
+            $built = odata_mimir_query_body(
+                (string) $parsed['company'],
+                (string) $parsed['entity'],
+                is_array($parsed['query'] ?? null) ? $parsed['query'] : [],
+                $ttlSeconds
+            );
+        } catch (OdataMimirFailure $exception) {
+            odata_mimir_log_fallback($exception);
+            return $sequential();
+        }
+        if ($built['empty']) {
+            $jobs[$index] = null;
+            continue;
+        }
+        $jobs[$index] = $built['body'];
+    }
+
+    $toSend = [];
+    foreach ($jobs as $index => $body) {
+        if ($body === null) {
+            continue;
+        }
+        $toSend[$index] = $body;
+    }
+
+    $completed = [];
+    foreach ($jobs as $index => $body) {
+        if ($body === null) {
+            $completed[$index] = [];
+        }
+    }
+
+    if ($toSend !== []) {
+        try {
+            $batch = odata_mimir_post_queries($toSend, $concurrency);
+        } catch (OdataMimirFailure $exception) {
+            odata_mimir_log_fallback($exception);
+            return $sequential();
+        } catch (OdataFilterRejected $rejected) {
+            $rejected->completed = $completed + $rejected->completed;
+            throw $rejected;
+        }
+        foreach ($batch as $index => $rows) {
+            $completed[$index] = $rows;
+        }
+    }
+
+    $aligned = [];
+    foreach ($urls as $index => $url) {
+        $aligned[] = $completed[$index] ?? [];
+    }
+
+    return $aligned;
+}
+
+/**
+ * @param array<int, array<string, mixed>> $indexedBodies
+ * @return array<int, list<array<string, mixed>>>
+ */
+function odata_mimir_post_queries(array $indexedBodies, int $concurrency): array
+{
+    $concurrency = max(1, min(8, $concurrency));
+    $items = [];
+    foreach ($indexedBodies as $index => $body) {
+        $items[] = ['index' => (int) $index, 'body' => $body];
+    }
+
+    $completed = [];
+    $rejected = [];
+    $down = null;
+
+    foreach (array_chunk($items, $concurrency) as $wave) {
+        $multi = curl_multi_init();
+        if ($multi === false) {
+            odata_mimir_fail(new Exception('Mímir parallelle query kon niet starten.'));
+        }
+        $handles = [];
+        foreach ($wave as $job) {
+            $ch = odata_mimir_init_curl('POST', 'query.php', $job['body']);
+            $handles[] = ['ch' => $ch, 'index' => $job['index']];
+            curl_multi_add_handle($multi, $ch);
+        }
+
+        $running = null;
+        $status = CURLM_OK;
+        do {
+            $status = curl_multi_exec($multi, $running);
+            if ($status === CURLM_CALL_MULTI_PERFORM) {
+                continue;
+            }
+            if ($running && $status === CURLM_OK) {
+                $selected = curl_multi_select($multi, 1.0);
+                if ($selected === -1) {
+                    usleep(10000);
+                }
+            }
+        } while ($running && ($status === CURLM_OK || $status === CURLM_CALL_MULTI_PERFORM));
+
+        foreach ($handles as $handle) {
+            $ch = $handle['ch'];
+            $index = (int) $handle['index'];
+            $raw = curl_multi_getcontent($ch);
+            $curlError = (string) curl_error($ch);
+            $errno = curl_errno($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_multi_remove_handle($multi, $ch);
+            curl_close($ch);
+
+            if ($errno !== 0 && $curlError === '') {
+                $curlError = 'cURL fout ' . $errno;
+            }
+            try {
+                $decoded = odata_mimir_interpret(is_string($raw) ? $raw : '', $code, $curlError, true);
+                if (!isset($decoded['value']) || !is_array($decoded['value'])) {
+                    odata_mimir_fail(new Exception("Mímir query-antwoord mist 'value'."));
+                }
+                $completed[$index] = $decoded['value'];
+            } catch (OdataFilterRejected $rejectedOne) {
+                $rejected[] = $index;
+            } catch (OdataMimirFailure $exception) {
+                $down = $exception;
+            }
+        }
+        curl_multi_close($multi);
+
+        if ($status !== CURLM_OK && $down === null) {
+            $down = new OdataMimirFailure('Mímir parallelle query mislukt.');
+            odata_mimir_trip($down);
+        }
+        if ($down instanceof OdataMimirFailure) {
+            break;
+        }
+    }
+
+    if ($down instanceof OdataMimirFailure) {
+        throw $down;
+    }
+    if ($rejected !== []) {
+        throw new OdataFilterRejected('Mímir HTTP 400', $rejected, $completed);
+    }
+
+    return $completed;
+}
+
 function odata_get_all_direct(string $url, array $auth, $ttlSeconds = 300): array
 {
     $ttlSeconds = max(1, (int) $ttlSeconds);
@@ -1238,6 +1500,8 @@ function odata_get_json(string $url, array $auth): array
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => odata_mimir_connect_timeout_seconds(),
+        CURLOPT_TIMEOUT => odata_bc_timeout_for_url($url),
         CURLOPT_HTTPHEADER => [
             "Accept: application/json",
         ],
@@ -1259,7 +1523,9 @@ function odata_get_json(string $url, array $auth): array
 
     $raw = curl_exec($ch);
     if ($raw === false) {
-        throw new Exception("cURL error: " . curl_error($ch));
+        $err = curl_error($ch);
+        curl_close($ch);
+        throw new Exception("cURL error: " . $err);
     }
 
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1353,6 +1619,8 @@ function odata_debug_fetch_raw_direct(string $url, array $auth): array
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => odata_mimir_connect_timeout_seconds(),
+        CURLOPT_TIMEOUT => odata_bc_timeout_for_url($url),
         CURLOPT_HTTPHEADER => [
             "Accept: application/json",
         ],
