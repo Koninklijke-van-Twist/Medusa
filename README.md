@@ -19,3 +19,7 @@ $baseUrl = 'https://mijn-bc-host:7148/';
 Met `$mimirApi` gezet proberen OData-fetches, `odata_debug_fetch_raw` en company-discovery (`auth_discover_companies_across_active_environments` / `odata_mimir_list_companies`) eerst Mímir. Faalt die aanroep (verbinding/timeout, non-2xx, ongeldige JSON of een Mímir-foutpayload), dan haalt Medusa dezelfde gegevens op via het oude Business Central-pad (`$baseUrl`, `$auth` / `$auth_list`, `$environment`, lokale odata-filecache) en slaat Mímir voor de rest van dat PHP-proces over. Ontbreken die BC-credentials, dan komt de oorspronkelijke Mímir-fout terug. Zonder `$mimirApi` blijft alleen het bestaande BC-pad actief.
 
 `goedkeuren.php` laadt `auth.php` altijd, zowel als webverzoek als via de CLI (`php web/goedkeuren.php`). Er is geen aparte nightly-entrypoint; een CLI-run gebruikt dezelfde fallback, met een Mímir-timeout van 600s. Webverzoeken (php-fpm/apache) gebruiken ongeveer 90s, met een connect-timeout van 10s.
+
+## Gebruikersbeheer
+
+Vaste admins (`opesket@kvt.nl`, `tfalken@kvt.nl`, `milanscheenloop@kvt.nl`) beheren de allowlist via `admin_users.php`. Die lijst staat in `web/data/access.sqlite`. Zolang die tabel leeg is, geldt `$allowedUsers` uit `auth.php`.
